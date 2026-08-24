@@ -20,3 +20,6 @@ mock-requests.log
 # 本地敏感配置（真实 key 不进版本库）
 config.local.yaml
 *.local.yaml
+
+# shade 插件生成物
+dependency-reduced-pom.xml
