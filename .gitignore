@@ -1,0 +1,19 @@
+# Maven
+target/
+
+# Java
+*.class
+*.jar
+!**/lib/**
+
+# IDE
+.idea/
+*.iml
+.vscode/
+
+# macOS
+.DS_Store
+
+# 本地敏感配置（真实 key 不进版本库）
+config.local.yaml
+*.local.yaml
