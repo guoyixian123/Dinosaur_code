@@ -14,6 +14,9 @@ target/
 # macOS
 .DS_Store
 
+# 冒烟测试产物
+mock-requests.log
+
 # 本地敏感配置（真实 key 不进版本库）
 config.local.yaml
 *.local.yaml
