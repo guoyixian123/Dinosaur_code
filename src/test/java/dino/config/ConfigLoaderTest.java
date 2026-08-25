@@ -40,9 +40,37 @@ class ConfigLoaderTest {
     }
 
     @Test
-    void missingFile() {
+    void missingFileAndNoEnvMeansMissingProtocol() {
+        // 配置文件可选：不存在时靠环境变量，环境变量也没有 → 报缺 protocol
         ConfigException e = loadFails(tmp.resolve("nope.yaml"), Map.of());
-        assertTrue(e.getMessage().contains("配置文件不存在: "), e.getMessage());
+        assertEquals("配置缺少 protocol 字段", e.getMessage());
+    }
+
+    @Test
+    void fullyEnvDrivenWithoutConfigFile() throws Exception {
+        AppConfig config = ConfigLoader.load(tmp.resolve("nope.yaml"), Map.of(
+                "DINO_PROTOCOL", "openai",
+                "DINO_MODEL", "qwen-plus",
+                "DINO_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1",
+                "DINO_API_KEY", "env-key"));
+        assertEquals("openai", config.protocol());
+        assertEquals("qwen-plus", config.model());
+        assertEquals("https://dashscope.aliyuncs.com/compatible-mode/v1", config.baseUrl());
+        assertEquals("env-key", config.apiKey());
+    }
+
+    @Test
+    void envVarsOverrideConfigFile() throws Exception {
+        Path file = write(validYaml()); // config: anthropic / claude-test / cfg-key
+        AppConfig config = ConfigLoader.load(file, Map.of(
+                "DINO_PROTOCOL", "openai",
+                "DINO_MODEL", "gpt-4o",
+                "DINO_BASE_URL", "https://custom.example/v1",
+                "DINO_API_KEY", "env-key"));
+        assertEquals("openai", config.protocol());
+        assertEquals("gpt-4o", config.model());
+        assertEquals("https://custom.example/v1", config.baseUrl());
+        assertEquals("env-key", config.apiKey());
     }
 
     @Test
