@@ -5,18 +5,18 @@ import dino.config.AppConfig;
 import java.io.PrintWriter;
 
 /**
- * 启动画面：绿色恐龙 ASCII + 名称 + 状态行（checklist §H）。
- * 用 ASCII 艺术而非 emoji，保证任意终端可渲染。
+ * 启动画面：绿色恐龙（Unicode 块字符）+ 名称 + 状态行（checklist §H）。
+ * 用块字符而非 emoji，保证任意终端可渲染、且可用 ANSI 上绿色。
  */
 final class Banner {
 
     private static final String DINO =
-            "      ^  ^  ^\n" +
-            "    .' \\   / '.\n" +
-            "   |   o o   |\n" +
-            "   |    -    |\n" +
-            "    \\  ___  /\n" +
-            "     '-.__.-'";
+            "      ▀▀  ▀▀  ▀▀\n" +
+            "    ▄█           █▄\n" +
+            "   █   o     o   █\n" +
+            "   █     ▄▄▄     █\n" +
+            "    ▀█▄▄▄▄▄▄▄▄▄█▀\n" +
+            "      ▐▄▄▄▄▄▄▄▄▄▌";
 
     private Banner() {
     }
