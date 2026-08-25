@@ -6,17 +6,15 @@
 
 ## A. 启动与配置
 
-- [x] 配置文件为可选：不存在时从环境变量解析；环境变量也缺 protocol/model 时 → 输出 `配置缺少 protocol 字段` / `配置缺少 model 字段`，退出码 1（单测验证）
+- [x] 配置文件为可选：不存在时从环境变量解析；环境变量也缺 model 时 → 输出 `配置缺少 model 字段`，退出码 1（单测验证）
 - [x] YAML 语法故意写坏 → 输出 `配置文件解析失败: <原因>`，退出码 1（单测验证文案；退出路径同冒烟）
-- [x] `protocol: foo` → 输出 `未知 protocol: foo，支持: anthropic, openai`，退出码 1（冒烟验证）
-- [x] 缺 `protocol` 字段 → 输出 `配置缺少 protocol 字段`，退出码 1（单测验证文案）
 - [x] 缺 `model` 字段 → 输出 `配置缺少 model 字段`，退出码 1（单测验证文案）
 - [x] `max_tokens: abc`（非正整数）→ 输出 `配置中 max_tokens 无效: 必须是正整数`，退出码 1（单测验证文案）
 - [x] 环境变量无 `DINO_API_KEY` 且配置无 `api_key` → 输出 `缺少 api_key: 请设置环境变量 DINO_API_KEY 或在配置中填写 api_key`，退出码 1（冒烟验证）
 - [x] 环境变量与配置同时存在时，mock 记录的认证头等于**环境变量**的值（离线测试断言 `Bearer env-key`）
-- [x] `DINO_PROTOCOL` / `DINO_MODEL` / `DINO_BASE_URL` 环境变量优先于 config 对应字段（单测）
-- [x] 完全无配置文件，仅靠 4 个环境变量（`DINO_PROTOCOL` `DINO_MODEL` `DINO_BASE_URL` `DINO_API_KEY`）即可启动（单测）
-- [x] 不配 `base_url`：`protocol: anthropic` 解析为 `https://api.anthropic.com`；`protocol: openai` 解析为 `https://api.openai.com/v1`（单测断言解析结果，Provider 使用 config 地址已被离线测试证明）
+- [x] `DINO_MODEL` / `DINO_BASE_URL` / `DINO_API_KEY` 环境变量优先于 config 对应字段（单测）
+- [x] 完全无配置文件，仅靠 3 个环境变量（`DINO_MODEL` `DINO_BASE_URL` `DINO_API_KEY`）即可启动（单测 + 冒烟）
+- [x] 不配 `base_url`：默认 `https://api.openai.com/v1`（单测断言解析结果，Provider 使用 config 地址已被离线测试证明）
 - [x] `base_url` 配成 mock 地址：请求确实到达 mock（离线测试 + 全部冒烟）
 - [x] `--config <路径>` 指定其它配置文件：以该文件为准（全部冒烟）
 
@@ -24,9 +22,9 @@
 
 - [x] 提问后：文字逐步流出（可见的渐进输出），不是长时间静默后一次性出现（冒烟 + 离线）
 - [x] mock 回放 OpenAI fixture（10 个 chunk、间隔 100ms）：事件分 10 次到达、总时长 ≥ 500ms（离线测试）
-- [x] mock 回放 Anthropic fixture（含 thinking）：先流式出现暗色前缀的思考事件，再出现正文事件（离线 + 单测）
+- [x] mock 回放推理 fixture（含 `reasoning_content`）：先流式出现思考事件，再出现正文事件（离线 + 单测）
 - [x] 每轮结束后，暗色显示本轮 token 用量（冒烟：`↑7 ↓3 tokens`）
-- [x] SSE 解析单元测试 ≥ 6 个用例且 `mvn test` 全绿，至少覆盖：半截行、一行多事件、空行、结束哨兵、thinking 增量、流中途断开（实际 8 个用例，62 项测试全绿）
+- [x] SSE 解析单元测试 ≥ 6 个用例且 `mvn test` 全绿，至少覆盖：半截行、一行多事件、空行、结束哨兵、思考增量、流中途断开
 
 ## C. 会话与记忆
 
@@ -51,7 +49,6 @@
 - [x] 未做任何调整时，默认最大输出 = 4096（离线测试断言请求体）
 - [x] `/tokens` 调整后重启并恢复会话：调整值仍然生效（冒烟：`/tokens high` → 重启 → `当前最大输出: 16384`）
 - [x] 未知命令 `/foo` → 输出 `未知命令: /foo` 并提示 `/help`，程序继续运行（单测）
-- [ ]（E2E）thinking 开启（预算默认 2048）且 `/tokens low`（1024 < 预算）：请求被 API 拒绝时显示友好错误、不崩溃（需真实 API 拒绝；约束：思考预算必须小于最大输出）
 
 ## E. Ctrl+C
 
@@ -59,12 +56,11 @@
 - [ ]（E2E）输入行非空时 Ctrl+C：仅清空当前输入行，程序不退出（交互终端验证）
 - [ ]（E2E）生成中 Ctrl+C：本轮立即停止，立刻回到提示符并可发起下一轮提问（机制已离线验证）
 
-## F. Extended Thinking
+## F. 思考（reasoning_content）
 
-- [ ]（E2E）配置开启思考（含预算）：思考内容以暗色前缀实时流式显示，随后是正文（事件序列已离线验证；视觉效果待真实链路确认）
-- [x] 不配置思考：请求体不含思考相关字段，终端无思考输出（离线测试断言请求体无 thinking 字段）
-- [ ]（E2E）对不支持思考的模型开启思考：显示友好错误、不崩溃（需真实 API）
-- [x] 思考预算缺省时使用 2048（单测）
+- [x] 推理模型的 `reasoning_content` 被解析为思考增量事件，先思考后正文（离线测试 + 单测）
+- [ ]（E2E）真实推理模型（DeepSeek reasoner / 千问思考）的思考流以暗色实时显示、与正文区分（事件映射已验证；终端视觉效果待真实链路）
+- [x] 普通模型无 `reasoning_content` 时，无思考输出、正文直接流出（离线测试 openai fixture）
 
 ## G. 错误处理（共同要求：提示后回到提示符，程序不退出）
 
@@ -77,12 +73,12 @@
 ## H. 主题
 
 - [x] 启动 banner：绿色（ANSI 32）恐龙 ASCII + "Dino Code" 字样（冒烟）
-- [x] banner 下方状态行：含 model、protocol、thinking 开关状态、会话提示（`已恢复上次会话 <标识>` / `新会话` 两种文案均冒烟验证）
+- [x] banner 下方状态行：含 model、会话提示（`已恢复上次会话 <标识>` / `新会话` 两种文案均冒烟验证）
 - [x] 输入提示符为绿色 `❯`（冒烟）
 - [x] 首字到达前：显示思考指示动画 + 🦖，首字到达后清除（冒烟）
 
 ## I. 端到端（真实 key，人工执行）
 
-- [ ] **Anthropic 真实链路**：配置 Claude → 提问看到逐字流式 → 追问验证记忆 → 开启 thinking 看到思考流 → `/tokens high` 生效 → 生成中 Ctrl+C 中断 → `/exit` 退出 → 重启后会话恢复且内容不丢
-- [ ] **OpenAI 真实链路**：配置 GPT → 提问看到逐字流式 → 追问验证记忆 → `/tokens` 调整生效 → 重启后会话恢复
+- [ ] **推理模型真实链路**：配置 DeepSeek 推理模型（或千问思考模型）→ 提问看到思考流暗色显示 + 正文逐字流式 → 追问验证记忆 → `/tokens high` 生效 → 生成中 Ctrl+C 中断 → `/exit` 退出 → 重启后会话恢复且内容不丢
+- [ ] **普通模型真实链路**：配置 DeepSeek 普通模型（或千问普通模型）→ 提问看到逐字流式 → 追问验证记忆 → `/tokens` 调整生效 → 重启后会话恢复
 - [ ] 交付物：`./dino`（或 `java -jar`）直接启动进入对话界面（`./dino` 脚本 + fat jar 已产出并冒烟通过，待真实链路下最终确认）
