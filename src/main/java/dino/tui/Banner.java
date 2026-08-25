@@ -10,13 +10,13 @@ import java.io.PrintWriter;
  */
 final class Banner {
 
-    private static final String DINO = """
-                          __
-                         / _)
-                _.----._/ /
-               /         /
-            __/ (  | (  |
-           /__.-'|_|--|_|""";
+    private static final String DINO =
+            "      ^  ^  ^\n" +
+            "    .' \\   / '.\n" +
+            "   |   o o   |\n" +
+            "   |    -    |\n" +
+            "    \\  ___  /\n" +
+            "     '-.__.-'";
 
     private Banner() {
     }
