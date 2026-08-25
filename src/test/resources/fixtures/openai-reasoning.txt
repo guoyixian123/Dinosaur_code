@@ -1,0 +1,10 @@
+data: {"id":"r-1","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"reasoning_content":"让我先推理"}}]}
+
+data: {"id":"r-1","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"reasoning_content":"一下"}}]}
+
+data: {"id":"r-1","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"答案是 42"}}]}
+
+data: {"id":"r-1","object":"chat.completion.chunk","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":9,"completion_tokens":5,"total_tokens":14}}
+
+data: [DONE]
+

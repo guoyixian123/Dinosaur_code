@@ -5,7 +5,6 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import dino.config.AppConfig;
-import dino.config.ThinkingConfig;
 import dino.core.ChatEvent;
 import dino.core.ErrorKind;
 import dino.core.Message;
@@ -13,7 +12,7 @@ import dino.core.Role;
 import dino.provider.ChatProvider;
 import dino.provider.ChatRequest;
 import dino.provider.EventStream;
-import dino.provider.ProviderFactory;
+import dino.provider.OpenAiProvider;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -49,7 +48,7 @@ class OfflineStreamTest {
     private static HttpServer server;
     private static int port;
 
-    private record Recorded(String authorization, String apiKey, String anthropicVersion, String body) {
+    private record Recorded(String authorization, String body) {
     }
 
     @BeforeAll
@@ -59,12 +58,12 @@ class OfflineStreamTest {
 
         server.createContext("/v1/chat/completions", exchange ->
                 streamFixture(exchange, "openai", "openai-stream.txt", 0));
+        server.createContext("/reasoning/chat/completions", exchange ->
+                streamFixture(exchange, "reasoning", "openai-reasoning.txt", 0));
         server.createContext("/ten/chat/completions", exchange ->
                 streamGenerated(exchange, "ten", 10, 100));
         server.createContext("/slow/chat/completions", exchange ->
                 streamGenerated(exchange, "slow", 20, 60));
-        server.createContext("/v1/messages", exchange ->
-                streamFixture(exchange, "anthropic", "anthropic-stream.txt", 0));
         server.createContext("/err401/chat/completions", exchange ->
                 respondError(exchange, "err401", 401, "{\"error\":{\"message\":\"invalid api key\"}}"));
         server.createContext("/err429/chat/completions", exchange ->
@@ -84,13 +83,17 @@ class OfflineStreamTest {
 
     // ---------- helpers ----------
 
-    private static AppConfig config(String protocol, String pathSuffix, String apiKey) {
-        return new AppConfig(protocol, "model-x",
-                "http://127.0.0.1:" + port + pathSuffix, apiKey, 4096, ThinkingConfig.DISABLED);
+    private static AppConfig config(String pathSuffix, String apiKey) {
+        return new AppConfig("model-x",
+                "http://127.0.0.1:" + port + pathSuffix, apiKey, 4096);
+    }
+
+    private static ChatProvider provider(AppConfig config) {
+        return new OpenAiProvider(config.baseUrl(), config.apiKey(), config.model());
     }
 
     private static ChatRequest request(int maxTokens) {
-        return new ChatRequest(List.of(new Message(Role.USER, "你好")), maxTokens, false, 0);
+        return new ChatRequest(List.of(new Message(Role.USER, "你好")), maxTokens);
     }
 
     private static List<ChatEvent> drain(EventStream stream) {
@@ -113,8 +116,6 @@ class OfflineStreamTest {
         String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
         RECORDED.put(key, new Recorded(
                 exchange.getRequestHeaders().getFirst("Authorization"),
-                exchange.getRequestHeaders().getFirst("x-api-key"),
-                exchange.getRequestHeaders().getFirst("anthropic-version"),
                 body));
     }
 
@@ -182,10 +183,7 @@ class OfflineStreamTest {
 
     @Test
     void openaiFullPipelineWithEnvKeyAndDefaultMaxTokens() throws Exception {
-        AppConfig config = config("openai", "/v1", "env-key");
-        ChatProvider provider = ProviderFactory.create(config);
-
-        List<ChatEvent> events = drain(provider.chat(request(4096)));
+        List<ChatEvent> events = drain(provider(config("/v1", "env-key")).chat(request(4096)));
 
         assertEquals(new ChatEvent.TextDelta("Hello"), events.get(0));
         assertEquals(new ChatEvent.TextDelta(" world"), events.get(1));
@@ -199,19 +197,25 @@ class OfflineStreamTest {
     }
 
     @Test
-    void openaiTenChunksArriveIncrementally() {
-        AppConfig config = config("openai", "/ten", "k");
-        ChatProvider provider = ProviderFactory.create(config);
+    void reasoningContentMapsToThinkingThenText() {
+        List<ChatEvent> events = drain(provider(config("/reasoning", "k")).chat(request(4096)));
 
+        assertEquals(List.of(
+                new ChatEvent.ThinkingDelta("让我先推理"),
+                new ChatEvent.ThinkingDelta("一下"),
+                new ChatEvent.TextDelta("答案是 42")), events.subList(0, 3));
+        assertInstanceOf(ChatEvent.Done.class, events.get(3));
+    }
+
+    @Test
+    void openaiTenChunksArriveIncrementally() {
         long start = System.nanoTime();
-        List<Long> arrivals = new ArrayList<>();
         int textEvents = 0;
-        try (EventStream stream = provider.chat(request(4096))) {
+        try (EventStream stream = provider(config("/ten", "k")).chat(request(4096))) {
             ChatEvent event;
             while ((event = stream.next()) != null) {
                 if (event instanceof ChatEvent.TextDelta) {
                     textEvents++;
-                    arrivals.add(System.nanoTime());
                 }
             }
         }
@@ -223,58 +227,17 @@ class OfflineStreamTest {
 
     @Test
     void tokensLowArrivesInRequestBody() throws Exception {
-        AppConfig config = config("openai", "/v1", "k");
-        ChatProvider provider = ProviderFactory.create(config);
-
-        drain(provider.chat(request(1024)));     // 模拟 /tokens low 后的请求
+        drain(provider(config("/v1", "k")).chat(request(1024))); // 模拟 /tokens low 后的请求
 
         JsonNode body = JSON.readTree(RECORDED.get("openai").body());
         assertEquals(1024, body.get("max_tokens").asInt()); // checklist §D：low=1024
     }
 
     @Test
-    void anthropicThinkingPipelineAndHeaders() throws Exception {
-        AppConfig config = config("anthropic", "", "sk-cfg");
-        ChatProvider provider = ProviderFactory.create(config);
-
-        List<ChatEvent> events = drain(provider.chat(
-                new ChatRequest(List.of(new Message(Role.USER, "你好")), 8000, true, 3000)));
-
-        assertEquals(List.of(
-                new ChatEvent.ThinkingDelta("让我想想"),
-                new ChatEvent.ThinkingDelta("……"),
-                new ChatEvent.TextDelta("你好 "),
-                new ChatEvent.TextDelta("！")), events.subList(0, 4));
-        assertInstanceOf(ChatEvent.Done.class, events.get(4));
-
-        Recorded recorded = RECORDED.get("anthropic");
-        assertEquals("sk-cfg", recorded.apiKey());               // x-api-key 认证
-        assertNotNull(recorded.anthropicVersion());              // 版本头
-        JsonNode body = JSON.readTree(recorded.body());
-        assertEquals(8000, body.get("max_tokens").asInt());
-        assertEquals(3000, body.get("thinking").get("budget_tokens").asInt());
-        assertEquals("enabled", body.get("thinking").get("type").asText());
-    }
-
-    @Test
-    void anthropicWithoutThinkingOmitsThinkingField() throws Exception {
-        AppConfig config = config("anthropic", "", "k");
-        ChatProvider provider = ProviderFactory.create(config);
-
-        drain(provider.chat(request(4096))); // thinking 未开启
-
-        JsonNode body = JSON.readTree(RECORDED.get("anthropic").body());
-        assertFalse(body.has("thinking")); // checklist §F：不带思考字段
-    }
-
-    @Test
     void interruptMidStreamKeepsPartialContentSilently() {
-        AppConfig config = config("openai", "/slow", "k");
-        ChatProvider provider = ProviderFactory.create(config);
-
         StringBuilder partial = new StringBuilder();
         int received = 0;
-        try (EventStream stream = provider.chat(request(4096))) {
+        try (EventStream stream = provider(config("/slow", "k")).chat(request(4096))) {
             ChatEvent event;
             while ((event = stream.next()) != null) {
                 if (event instanceof ChatEvent.TextDelta text) {
@@ -295,8 +258,7 @@ class OfflineStreamTest {
 
     @Test
     void status401MapsToAuthFailure() {
-        ChatProvider provider = ProviderFactory.create(config("openai", "/err401", "bad"));
-        List<ChatEvent> events = drain(provider.chat(request(4096)));
+        List<ChatEvent> events = drain(provider(config("/err401", "bad")).chat(request(4096)));
 
         assertEquals(1, events.size());
         ChatEvent.Failure failure = assertInstanceOf(ChatEvent.Failure.class, events.get(0));
@@ -306,8 +268,7 @@ class OfflineStreamTest {
 
     @Test
     void status429MapsToRateLimit() {
-        ChatProvider provider = ProviderFactory.create(config("openai", "/err429", "k"));
-        List<ChatEvent> events = drain(provider.chat(request(4096)));
+        List<ChatEvent> events = drain(provider(config("/err429", "k")).chat(request(4096)));
 
         ChatEvent.Failure failure = assertInstanceOf(ChatEvent.Failure.class, events.get(0));
         assertEquals(ErrorKind.RATE_LIMIT, failure.kind());
@@ -315,8 +276,7 @@ class OfflineStreamTest {
 
     @Test
     void contextOverflowDetected() {
-        ChatProvider provider = ProviderFactory.create(config("openai", "/overflow", "k"));
-        List<ChatEvent> events = drain(provider.chat(request(4096)));
+        List<ChatEvent> events = drain(provider(config("/overflow", "k")).chat(request(4096)));
 
         ChatEvent.Failure failure = assertInstanceOf(ChatEvent.Failure.class, events.get(0));
         assertEquals(ErrorKind.CONTEXT_OVERFLOW, failure.kind());
@@ -325,10 +285,8 @@ class OfflineStreamTest {
 
     @Test
     void connectionRefusedMapsToNetwork() {
-        AppConfig config = new AppConfig("openai", "model-x",
-                "http://127.0.0.1:1", "k", 4096, ThinkingConfig.DISABLED); // 1 端口：拒绝连接
-        ChatProvider provider = ProviderFactory.create(config);
-        List<ChatEvent> events = drain(provider.chat(request(4096)));
+        AppConfig config = new AppConfig("model-x", "http://127.0.0.1:1", "k", 4096); // 1 端口：拒绝连接
+        List<ChatEvent> events = drain(provider(config).chat(request(4096)));
 
         ChatEvent.Failure failure = assertInstanceOf(ChatEvent.Failure.class, events.get(0));
         assertEquals(ErrorKind.NETWORK, failure.kind());

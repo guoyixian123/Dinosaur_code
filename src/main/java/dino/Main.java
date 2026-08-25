@@ -4,7 +4,7 @@ import dino.config.AppConfig;
 import dino.config.ConfigException;
 import dino.config.ConfigLoader;
 import dino.provider.ChatProvider;
-import dino.provider.ProviderFactory;
+import dino.provider.OpenAiProvider;
 import dino.session.Session;
 import dino.session.SessionSettings;
 import dino.session.SessionStore;
@@ -34,7 +34,7 @@ public final class Main {
                 : new Session(SessionStore.newSessionId(),
                         System.currentTimeMillis(), new ArrayList<>(), SessionSettings.EMPTY);
 
-        ChatProvider provider = ProviderFactory.create(config);
+        ChatProvider provider = new OpenAiProvider(config.baseUrl(), config.apiKey(), config.model());
         int exitCode = new Tui(config, provider, store, session, restored).run();
         System.exit(exitCode);
     }

@@ -43,6 +43,18 @@ class OpenAiProviderTest {
     }
 
     @Test
+    void replaysReasoningFixtureIntoThinkingAndText() {
+        var provider = new OpenAiProvider("http://unused", "k", "gpt-test");
+        List<ChatEvent> events = drain(provider.streamFrom(fixture("openai-reasoning.txt")));
+
+        assertEquals(4, events.size());
+        assertEquals(new ChatEvent.ThinkingDelta("让我先推理"), events.get(0));
+        assertEquals(new ChatEvent.ThinkingDelta("一下"), events.get(1));
+        assertEquals(new ChatEvent.TextDelta("答案是 42"), events.get(2));
+        assertInstanceOf(ChatEvent.Done.class, events.get(3));
+    }
+
+    @Test
     void truncatedStreamBecomesNetworkFailure() {
         var provider = new OpenAiProvider("http://unused", "k", "gpt-test");
         List<ChatEvent> events = drain(provider.streamFrom(fixture("openai-cut.txt")));

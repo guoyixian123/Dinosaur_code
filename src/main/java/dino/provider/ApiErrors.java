@@ -6,7 +6,7 @@ import dino.core.ChatEvent;
 import dino.core.ErrorKind;
 
 /**
- * HTTP / 流内错误到统一 Failure 事件的映射。文案见 checklist §G。
+ * HTTP 错误到统一 Failure 事件的映射。文案见 checklist §G。
  */
 final class ApiErrors {
 
@@ -30,23 +30,12 @@ final class ApiErrors {
                 "请求失败 (" + status + "): " + truncate(apiMessage));
     }
 
-    /** 流内的错误事件（Anthropic 的 event: error）。 */
-    static ChatEvent.Failure fromStreamError(String type, String message) {
-        if (looksLikeOverflow(message)) {
-            return overflowFailure();
-        }
-        if (type != null && type.contains("overloaded")) {
-            return new ChatEvent.Failure(ErrorKind.RATE_LIMIT, "服务端繁忙（过载），请稍后再试");
-        }
-        return new ChatEvent.Failure(ErrorKind.OTHER, "请求失败: " + truncate(message));
-    }
-
     static ChatEvent.Failure overflowFailure() {
         return new ChatEvent.Failure(ErrorKind.CONTEXT_OVERFLOW,
                 "对话历史超出模型上下文上限，可用 /new 开启新会话");
     }
 
-    /** 两家错误体同形：{"error": {"message": "..."}}。解析失败返回原文截断。 */
+    /** OpenAI 错误体：{"error": {"message": "..."}}。解析失败返回原文截断。 */
     static String extractMessage(String body) {
         try {
             JsonNode node = JSON.readTree(body);

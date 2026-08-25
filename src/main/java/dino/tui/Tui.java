@@ -141,9 +141,7 @@ public final class Tui {
 
         ChatRequest request = new ChatRequest(
                 List.copyOf(session.getMessages()),
-                currentMaxTokens(),
-                config.thinking().enabled(),
-                config.thinking().budgetTokens());
+                currentMaxTokens());
 
         StringBuilder reply = new StringBuilder();
         Spinner spinner = new Spinner(terminal.writer());

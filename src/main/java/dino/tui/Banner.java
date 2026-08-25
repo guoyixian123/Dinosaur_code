@@ -24,11 +24,7 @@ final class Banner {
     static void print(PrintWriter out, AppConfig config, String sessionInfo) {
         out.println(Ansi.GREEN + DINO + Ansi.RESET);
         out.println(Ansi.BOLD + Ansi.GREEN + "Dino Code" + Ansi.RESET + Ansi.DIM + " v0.1" + Ansi.RESET);
-        out.println(Ansi.DIM
-                + "model=" + config.model()
-                + " protocol=" + config.protocol()
-                + " thinking=" + (config.thinking().enabled() ? "on" : "off")
-                + Ansi.RESET);
+        out.println(Ansi.DIM + "model=" + config.model() + Ansi.RESET);
         out.println(Ansi.DIM + sessionInfo + Ansi.RESET);
         out.println();
         out.flush();

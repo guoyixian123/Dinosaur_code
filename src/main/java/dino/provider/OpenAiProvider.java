@@ -81,7 +81,13 @@ public final class OpenAiProvider extends AbstractHttpProvider {
                         usageNode.path("prompt_tokens").asInt(),
                         usageNode.path("completion_tokens").asInt());
             }
-            JsonNode content = root.path("choices").path(0).path("delta").path("content");
+            JsonNode delta = root.path("choices").path(0).path("delta");
+            // 推理模型（DeepSeek reasoner / 千问思考）的思考流 → 思考增量，暗色显示
+            JsonNode reasoning = delta.path("reasoning_content");
+            if (reasoning.isTextual() && !reasoning.asText().isEmpty()) {
+                return new ChatEvent.ThinkingDelta(reasoning.asText());
+            }
+            JsonNode content = delta.path("content");
             if (content.isTextual() && !content.asText().isEmpty()) {
                 return new ChatEvent.TextDelta(content.asText());
             }
