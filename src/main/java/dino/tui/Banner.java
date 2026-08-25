@@ -11,12 +11,9 @@ import java.io.PrintWriter;
 final class Banner {
 
     private static final String DINO =
-            "      ▀▀  ▀▀  ▀▀\n" +
-            "    ▄█           █▄\n" +
-            "   █   o     o   █\n" +
-            "   █     ▄▄▄     █\n" +
-            "    ▀█▄▄▄▄▄▄▄▄▄█▀\n" +
-            "      ▐▄▄▄▄▄▄▄▄▄▌";
+            " ▄▄  ▄▄\n" +
+            "( o  o )\n" +
+            " ▀▀▀▀▀▀";
 
     private Banner() {
     }
