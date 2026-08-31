@@ -4,8 +4,8 @@
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
 
-    <groupId>dino</groupId>
-    <artifactId>dino</artifactId>
+    <groupId>dinocode</groupId>
+    <artifactId>dinocode</artifactId>
     <version>0.1.0</version>
     <packaging>jar</packaging>
 
@@ -63,10 +63,10 @@
                             <goal>shade</goal>
                         </goals>
                         <configuration>
-                            <finalName>dino</finalName>
+                            <finalName>dinocode</finalName>
                             <transformers>
                                 <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
-                                    <mainClass>dino.Main</mainClass>
+                                    <mainClass>dinocode.Main</mainClass>
                                 </transformer>
                             </transformers>
                         </configuration>
