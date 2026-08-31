@@ -176,10 +176,16 @@ class StateAndRecoveryTest {
     @Test
     void sessionContextCreatesSpillDir() {
         SessionContext sc = SessionContext.create(root);
-        assertTrue(sc.sessionId().matches("\\d+-[0-9a-f]{8}"));
+        // ch09 F9：新格式 ID
+        assertTrue(sc.sessionId().matches("\\d{8}-\\d{6}-[0-9a-f]{4}"),
+                "实际: " + sc.sessionId());
         assertTrue(java.nio.file.Files.isDirectory(sc.spillDir()));
-        // 幂等
-        SessionContext sc2 = new SessionContext(sc.sessionId(), sc.spillDir());
-        assertEquals(sc.spillDir(), sc2.spillDir());
+        // 同 ID open：spillDir 一致
+        try {
+            SessionContext sc2 = SessionContext.open(root, sc.sessionId());
+            assertEquals(sc.spillDir(), sc2.spillDir());
+        } catch (Exception e) {
+            throw new AssertionError(e);
+        }
     }
 }

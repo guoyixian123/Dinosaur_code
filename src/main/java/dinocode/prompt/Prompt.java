@@ -32,8 +32,17 @@ public final class Prompt {
 
     /** 完整稳定系统提示 = 固定模块 + 可选空槽（空槽自动跳过）。 */
     public static String buildSystemPrompt() {
+        return buildSystemPrompt("", "");
+    }
+
+    /**
+     * ch09 F43/AC27：参数化系统提示。
+     * instructions 非空 → 填入 custom-instructions 槽（priority 80）；
+     * memory 非空 → 填入 long-term-memory 槽（priority 100）；空则跳过（与 ch08 一致）。
+     */
+    public static String buildSystemPrompt(String instructions, String memory) {
         List<Module> all = new ArrayList<>(Modules.fixedModules());
-        all.addAll(Modules.optionalModules());
+        all.addAll(Modules.optionalModules(instructions, memory));
         return assembleSystem(all);
     }
 

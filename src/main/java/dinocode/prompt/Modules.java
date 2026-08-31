@@ -54,12 +54,17 @@ public final class Modules {
                 new Module("文本输出", 70, OUTPUT));
     }
 
-    /** 预留空槽：内容为空，装配时跳过（F1）；后续章节填充。 */
-    public static List<Module> optionalModules() {
+    /** 预留空槽：内容为空时装配跳过（F1）；ch09 起接受指令与记忆文本填充（F43）。 */
+    public static List<Module> optionalModules(String instructions, String memory) {
         return List.of(
-                new Module("自定义指令", 80, ""),
+                new Module("自定义指令", 80, instructions == null ? "" : instructions),
                 new Module("已激活 Skill", 90, ""),
-                new Module("长期记忆", 100, ""));
+                new Module("长期记忆", 100, memory == null ? "" : memory));
+    }
+
+    /** 兼容旧调用：两槽均为空。 */
+    public static List<Module> optionalModules() {
+        return optionalModules("", "");
     }
 
     private Modules() {

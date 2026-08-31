@@ -17,7 +17,12 @@ public final class CompactContext {
     public final ContentReplacementState replacement = new ContentReplacementState();
     public final Recovery.RecoveryState recovery = new Recovery.RecoveryState();
     public final AutoCompactTrackingState autoTracking = new AutoCompactTrackingState();
-    public final SessionContext session;
+    /** 会话上下文：ch09 /resume 恢复后可整体替换。 */
+    private volatile SessionContext session;
+
+    public SessionContext session() {
+        return session;
+    }
     public volatile int contextWindow;
 
     private final ReentrantLock anchorLock = new ReentrantLock();
@@ -70,6 +75,18 @@ public final class CompactContext {
 
     public void releaseRun() {
         runLock.unlock();
+    }
+
+    /** ch09 /resume：替换会话上下文并重置锚点（历史已切换，锚点失效）。 */
+    public void resetSession(SessionContext newSession) {
+        anchorLock.lock();
+        try {
+            this.session = newSession;
+            this.usageAnchor = 0;
+            this.anchorMsgLen = 0;
+        } finally {
+            anchorLock.unlock();
+        }
     }
 
     /** RunLock guard。 */

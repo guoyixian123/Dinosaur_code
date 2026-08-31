@@ -45,6 +45,15 @@ public final class Main {
         ToolRegistry registry = ToolRegistry.createDefault();
         java.nio.file.Path root = java.nio.file.Path.of("").toAbsolutePath();
 
+        // ch09 F1~F8：三层指令文件加载（进程启动时一次，结果缓存）
+        String instructionText = new dinocode.instructions.Loader(root).load();
+        // ch09 F27~F42：记忆管理器（两级 Store）+ 索引注入文本
+        dinocode.memory.Memory.Manager memMgr = new dinocode.memory.Memory.Manager(
+                root.resolve(".dino").resolve("memory"),
+                Path.of(System.getProperty("user.home"), ".dino", "memory"));
+        memMgr.setProvider(provider);
+        String memoryText = memMgr.loadIndex();
+
         // ch07：MCP 客户端——加载配置、并发连接 server、适配注册远端工具；退出时统一关闭
         McpConfig mcpConfig = dinocode.mcp.ConfigLoader.loadConfig(root);
         McpManager mcpManager = McpManager.start(mcpConfig, "0.1.0");
@@ -56,9 +65,28 @@ public final class Main {
         // ch06：项目根沙箱 + 三层规则配置 + 启动默认模式
         PermissionEngine engine = PermissionEngine.create(root);
         // ch08：上下文管理状态（会话目录 + 账本 + 熔断 + 锚点），进程启动时生成一次（F34/F35）
-        CompactContext compact = new CompactContext(SessionContext.create(root),
-                config.effectiveContextWindow());
-        int exitCode = new Tui(config, provider, registry, engine, compact, store, session, restored).run();
+        SessionContext sesCtx = SessionContext.create(root);
+        CompactContext compact = new CompactContext(sesCtx, config.effectiveContextWindow());
+
+        // ch09 F13~F16：JSONL 会话存档写入器 + Session 回调挂接
+        dinocode.session.archive.Writer archiveWriter;
+        try {
+            archiveWriter = dinocode.session.archive.Writer.create(sesCtx.sessionDir());
+        } catch (java.io.IOException e) {
+            System.err.println("警告: 会话存档不可用(" + e.getMessage() + ")，继续运行");
+            archiveWriter = null;
+        }
+        if (archiveWriter != null) {
+            session.setArchiveCallbacks(archiveWriter::archiveAppend, archiveWriter::archiveReplace);
+        }
+
+        // ch09 F25/F26：后台清理 30 天前的过期会话目录（不阻塞启动）
+        Thread.ofVirtual().start(() -> dinocode.session.archive.SessionArchive.cleanExpired(
+                root.resolve(".dino").resolve("sessions"), java.time.Duration.ofDays(30)));
+
+        int exitCode = new Tui(config, provider, registry, engine, compact, store, session, restored)
+                .withArchive(archiveWriter, memMgr, instructionText, memoryText, root)
+                .run();
         mcpManager.close(); // 正常退出路径（shutdown hook 兜底异常退出）
         System.exit(exitCode);
     }

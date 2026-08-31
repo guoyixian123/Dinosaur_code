@@ -33,6 +33,7 @@ import java.io.IOException;
 import java.io.PrintWriter;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.List;
 
 /**
  * 终端交互层：唯一接触终端的地方（见 spec 设计骨架）。
@@ -71,6 +72,13 @@ public final class Tui {
     /** 人在回路待批准请求（ch06 F8）；非 null 表示处于 APPROVING 态。 */
     private volatile ApprovalRequest pendingApproval;
 
+    // ch09：会话存档与记忆
+    private dinocode.session.archive.Writer archiveWriter;
+    private dinocode.memory.Memory.Manager memMgr;
+    private String instructionText = "";
+    private String memoryText = "";
+    private java.nio.file.Path workspace;
+
     public Tui(AppConfig config, ChatProvider provider, ToolRegistry registry, PermissionEngine engine,
                CompactContext compact, SessionStore store, Session session, boolean restored) {
         this.config = config;
@@ -82,6 +90,17 @@ public final class Tui {
         this.store = store;
         this.session = session;
         this.restored = restored;
+    }
+
+    /** ch09：注入存档/记忆组件（Main 在构造后链式调用）。 */
+    public Tui withArchive(dinocode.session.archive.Writer writer, dinocode.memory.Memory.Manager memMgr,
+                           String instructionText, String memoryText, java.nio.file.Path workspace) {
+        this.archiveWriter = writer;
+        this.memMgr = memMgr;
+        this.instructionText = instructionText == null ? "" : instructionText;
+        this.memoryText = memoryText == null ? "" : memoryText;
+        this.workspace = workspace;
+        return this;
     }
 
     /** @return 进程退出码 */
@@ -177,6 +196,11 @@ public final class Tui {
             handleCompact();
             return true;
         }
+        // ch09 F17~F24：/resume 从历史会话列表恢复（仅空闲态可用，F46）
+        if ("/resume".equals(input)) {
+            handleResume();
+            return true;
+        }
         // /plan 与 /do 仍为计划工作流专用入口/出口（/do 固定回 default）
         if ("/plan".equals(input)) {
             mode = Mode.PLAN;
@@ -237,7 +261,7 @@ public final class Tui {
             ContextCompactor.Result r = ContextCompactor.manage(new ContextCompactor.Input(
                     session.getMessages(), provider, compact.contextWindow,
                     registry.definitions(), compact.replacement, compact.recovery,
-                    compact.autoTracking, compact.session,
+                    compact.autoTracking, compact.session(),
                     compact.getUsageAnchor(), compact.getAnchorMsgLen(), before,
                     ContextCompactor.TriggerKind.MANUAL));
             if (r.newMsgs() != null) {
@@ -251,10 +275,95 @@ public final class Tui {
         }
     }
 
-    /** @param intoHistory false 表示指令由 Agent 直接消费、不写入历史（/do）。 */
+    /**
+     * ch09 F17~F24：/resume 会话恢复——列出有效会话（按修改时间倒序），用户输入编号选择，
+     * 空输入/Esc 取消。行式菜单适配 JLine 阻塞读行模型（AC11）。
+     */
+    private void handleResume() {
+        if (generating) {
+            renderer.notice("请等待当前任务完成。"); // F46 互斥
+            return;
+        }
+        if (workspace == null) {
+            renderer.notice("会话存档未启用。");
+            return;
+        }
+        var sessions = dinocode.session.archive.SessionArchive.list(
+                workspace.resolve(".dino").resolve("sessions"));
+        if (sessions.isEmpty()) {
+            renderer.notice("没有可恢复的历史会话。");
+            return;
+        }
+        renderer.notice("选择要恢复的会话（输入编号，直接回车取消）：");
+        for (int i = 0; i < sessions.size() && i < 10; i++) {
+            var info = sessions.get(i);
+            renderer.notice(String.format("  [%d] %s · %s · %s · %s",
+                    i + 1, info.title(), dinocode.session.archive.SessionArchive.relativeTime(info.modifiedAt()),
+                    info.model().isEmpty() ? "-" : info.model(), humanSize(info.size())));
+        }
+        try {
+            String choice = reader.readLine(Ansi.GREEN + "resume ❯ " + Ansi.RESET).strip();
+            if (choice.isEmpty()) {
+                renderer.notice("已取消恢复。");
+                return;
+            }
+            int idx;
+            try {
+                idx = Integer.parseInt(choice) - 1;
+            } catch (NumberFormatException e) {
+                renderer.notice("无效编号，已取消恢复。");
+                return;
+            }
+            if (idx < 0 || idx >= sessions.size()) {
+                renderer.notice("编号超出范围，已取消恢复。");
+                return;
+            }
+            resumeSession(sessions.get(idx));
+        } catch (org.jline.reader.UserInterruptException | org.jline.reader.EndOfFileException e) {
+            renderer.notice("已取消恢复。");
+        }
+    }
+
+    /** 执行恢复流程（F21/F22/F23）。 */
+    private void resumeSession(dinocode.session.archive.SessionArchive.SessionInfo info) {
+        try {
+            // 1. 加载消息（从最后 compact 标记之后；坏行跳过；孤立工具调用截断）
+            List<Message> msgs = dinocode.session.archive.SessionArchive.load(info.dir());
+            // 2. 时间跨度提醒（F21-5/AC17）：最后消息距现在超 6 小时
+            java.time.Duration gap = java.time.Duration.between(
+                    dinocode.session.archive.SessionArchive.lastModifiedOf(info.dir()),
+                    java.time.Instant.now());
+            if (gap.toHours() >= 6) {
+                long hours = gap.toHours();
+                String span = hours >= 24 ? (gap.toDays() + " 天") : (hours + " 小时");
+                msgs.add(Message.user("[系统提示] 本会话已暂停 " + span
+                        + "。部分上下文可能已过时，如需最新信息请重新读取相关文件。"));
+            }
+            // 3. 切换会话：新 Session（回调指向新 Writer）+ 替换 SessionContext
+            dinocode.session.archive.Writer newWriter = dinocode.session.archive.Writer.open(info.dir());
+            session = Session.fromMessages(info.id(), msgs,
+                    newWriter::archiveAppend, newWriter::archiveReplace);
+            compact.resetSession(dinocode.compact.state.SessionContext.open(workspace, info.id()));
+            // 4. F24：原新会话的 JSONL 保留不删
+            renderer.notice("已恢复会话 " + info.id() + "，共 " + msgs.size() + " 条消息");
+        } catch (Exception e) {
+            renderer.failure("恢复失败: " + e.getMessage()); // N5 单点错误降级
+        }
+    }
+
+    private static String humanSize(long bytes) {
+        if (bytes < 1024) {
+            return bytes + "B";
+        }
+        if (bytes < 1024 * 1024) {
+            return String.format("%.1fKB", bytes / 1024.0);
+        }
+        return String.format("%.1fMB", bytes / 1024.0 / 1024);
+    }
+
     private void turn(String input, boolean intoHistory) {
         if (intoHistory) {
-            session.getMessages().add(Message.user(input));
+            session.append(Message.user(input)); // ch09：经 append 触发 JSONL 存档回调
         }
         session.setLastActive(System.currentTimeMillis());
         saveSessionQuietly();
@@ -266,7 +375,8 @@ public final class Tui {
         CancelToken cancel = new CancelToken();
         turnCancel = cancel;
         spinner.start();
-        try (TurnStream stream = new Agent(provider, registry, "0.1.0", engine)
+        try (TurnStream stream = new Agent(provider, registry, "0.1.0", engine, compact, memMgr,
+                instructionText, memoryText)
                 .run(session.getMessages(), currentMaxTokens(), mode, cancel)) {
             TurnEvent event;
             while ((event = stream.next()) != null) {

@@ -64,39 +64,55 @@ public final class Agent {
     private final PermissionEngine engine;
     /** ch08：上下文管理长生命周期状态；null 表示禁用压缩（测试/向后兼容）。 */
     private final CompactContext compact;
+    /** ch09：记忆管理器（可空）+ 注入系统提示的指令/记忆文本。 */
+    private final dinocode.memory.Memory.Manager memMgr;
+    private final String instructionText;
+    private final String memoryText;
+    /** ch09：run 轮次计数（记忆更新触发用）。 */
+    private final java.util.concurrent.atomic.AtomicLong turnCount = new java.util.concurrent.atomic.AtomicLong();
     /** 测试用：预置的人在回路决策队列；非 null 时 requestApproval 从此取决策（null=取消）。 */
     private final java.util.Deque<Outcome> scriptedOutcomes;
 
     public Agent(ChatProvider provider, ToolRegistry registry, String version, PermissionEngine engine) {
-        this(provider, registry, version, engine, null, null);
+        this(provider, registry, version, engine, null, null, "", "");
     }
 
     /** 测试用：预置人在回路决策（依序消费；耗尽后阻塞等待真实回传）。 */
     public Agent(ChatProvider provider, ToolRegistry registry, String version, PermissionEngine engine,
                  java.util.Deque<Outcome> scriptedOutcomes) {
-        this(provider, registry, version, engine, null, scriptedOutcomes);
+        this(provider, registry, version, engine, null, null, "", "", scriptedOutcomes);
     }
 
-    /** 完整构造：ch08 上下文管理启用。 */
+    /** 完整构造：ch08 上下文管理 + ch09 记忆。 */
     public Agent(ChatProvider provider, ToolRegistry registry, String version, PermissionEngine engine,
-                 CompactContext compact, java.util.Deque<Outcome> scriptedOutcomes) {
+                 CompactContext compact, dinocode.memory.Memory.Manager memMgr,
+                 String instructionText, String memoryText) {
+        this(provider, registry, version, engine, compact, memMgr, instructionText, memoryText, null);
+    }
+
+    private Agent(ChatProvider provider, ToolRegistry registry, String version, PermissionEngine engine,
+                  CompactContext compact, dinocode.memory.Memory.Manager memMgr,
+                  String instructionText, String memoryText, java.util.Deque<Outcome> scriptedOutcomes) {
         this.provider = provider;
         this.registry = registry;
         this.version = version == null ? "" : version;
         this.engine = engine;
         this.compact = compact;
+        this.memMgr = memMgr;
+        this.instructionText = instructionText == null ? "" : instructionText;
+        this.memoryText = memoryText == null ? "" : memoryText;
         this.scriptedOutcomes = scriptedOutcomes;
     }
 
     /** 测试/无权限场景的便捷构造：跳过权限判定（全放行）。 */
     public Agent(ChatProvider provider, ToolRegistry registry, String version) {
-        this(provider, registry, version, PermissionEngine.allowAll(), null, null);
+        this(provider, registry, version, PermissionEngine.allowAll());
     }
 
-    /** 无权限引擎但有压缩上下文（Main/Tui 主构造路径）。 */
+    /** 无权限引擎但有压缩上下文（兼容 ch08 调用点）。 */
     public Agent(ChatProvider provider, ToolRegistry registry, String version, PermissionEngine engine,
                  CompactContext compact) {
-        this(provider, registry, version, engine, compact, null);
+        this(provider, registry, version, engine, compact, null, "", "");
     }
 
     /**
@@ -108,7 +124,8 @@ public final class Agent {
                 ? registry.readOnlyDefinitions()
                 : registry.definitions();
         // 稳定系统提示跨模式一致（规划提醒已移入 reminder 通道，ch05 F7）
-        String stable = Prompt.buildSystemPrompt();
+        // ch09：指令与记忆文本注入 custom-instructions / long-term-memory 槽位（F43）
+        String stable = Prompt.buildSystemPrompt(instructionText, memoryText);
         String envText = Environment.gather(version, provider.model()).render();
 
         BlockingQueue<TurnEvent> queue = new LinkedBlockingQueue<>();
@@ -219,6 +236,7 @@ public final class Agent {
             // 无工具调用：纯文本即最终答复（自然完成，F2-1）
             if (out.calls().isEmpty()) {
                 history.add(Message.assistant(ensureFinal(out.text())));
+                triggerMemoryUpdate(history); // ch09 F35：本轮结束，条件满足时异步提取笔记
                 return new TurnEvent.Done(out.usage);
             }
 
@@ -271,7 +289,7 @@ public final class Agent {
                 }
                 ContextCompactor.Result r = ContextCompactor.manage(new ContextCompactor.Input(
                         history, provider, compact.contextWindow, defs,
-                        compact.replacement, compact.recovery, compact.autoTracking, compact.session,
+                        compact.replacement, compact.recovery, compact.autoTracking, compact.session(),
                         anchor, anchorLen, est, ContextCompactor.TriggerKind.AUTO));
                 if (r.newMsgs() != null) {
                     history.clear();
@@ -307,7 +325,7 @@ public final class Agent {
         try {
             ContextCompactor.Result r = ContextCompactor.manage(new ContextCompactor.Input(
                     history, provider, compact.contextWindow, defs,
-                    compact.replacement, compact.recovery, compact.autoTracking, compact.session,
+                    compact.replacement, compact.recovery, compact.autoTracking, compact.session(),
                     0, 0, Token.estimateTokens(0, history, 0),
                     ContextCompactor.TriggerKind.EMERGENCY));
             if (r.newMsgs() != null) {
@@ -356,6 +374,36 @@ public final class Agent {
                 // 读盘失败：recovery 缺一条无所谓（F19 降级）
             }
         }
+    }
+
+    /**
+     * ch09 F35：本轮自然停下后按条件触发异步记忆更新——
+     * 每 5 轮或本轮用户消息含显式记忆请求关键词（或关系）；失败静默不影响主会话（F42）。
+     */
+    private void triggerMemoryUpdate(List<Message> history) {
+        if (memMgr == null) {
+            return;
+        }
+        long turns = turnCount.incrementAndGet();
+        // 最近一轮：从最后一条 user 到最终 assistant
+        List<Message> recent = extractRecentTurn(history);
+        boolean explicit = recent.stream()
+                .anyMatch(m -> m.role() == Role.USER && dinocode.memory.Memory.Manager.hasMemorySignal(m.content()));
+        if (turns % 5 == 0 || explicit) {
+            memMgr.updateAsync(recent);
+        }
+    }
+
+    /** 提取最近一轮（最后一条 user 起到末尾）。 */
+    private static List<Message> extractRecentTurn(List<Message> history) {
+        int start = 0;
+        for (int i = history.size() - 1; i >= 0; i--) {
+            if (history.get(i).role() == Role.USER) {
+                start = i;
+                break;
+            }
+        }
+        return start < history.size() ? new ArrayList<>(history.subList(start, history.size())) : List.of();
     }
 
     /** 流失败内部信号：区分上下文超限（触发紧急压缩）与其他错误。 */
