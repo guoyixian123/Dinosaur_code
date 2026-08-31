@@ -152,8 +152,16 @@ public final class Tui {
 
     /** Shift+Tab（终端发送 ESC[Z）→ /mode 宏（独立方法避免源码内嵌控制字符）。 */
     private static void bindShiftTab(LineReader reader) {
-        // JLine 3：宏绑定用 org.jline.reader.Macro；"[Z" 中的 [Z 前含 ESC 控制字符
-        reader.getKeys().bind(new org.jline.reader.Macro("/mode\n"), "[Z");
+        // JLine 3.26 默认 LineReader 的 getKeys() 可能为 null（未启用 keymap 时）：
+        // 绑定失败只降级（Shift+Tab 不可用，/mode 命令仍可手动输入），不阻断启动
+        try {
+            var keyMap = reader.getKeys();
+            if (keyMap != null) {
+                keyMap.bind(new org.jline.reader.Macro("/mode\n"), "[Z");
+            }
+        } catch (RuntimeException e) {
+            // 忽略：键位绑定是增强功能
+        }
     }
 
     /** @return false 表示应退出程序 */
