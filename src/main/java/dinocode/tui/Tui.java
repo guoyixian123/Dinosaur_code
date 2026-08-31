@@ -90,6 +90,15 @@ public final class Tui {
         this.store = store;
         this.session = session;
         this.restored = restored;
+        // ch10 F1/F2：启动期注册 12 条内置命令 + 2 条遗留本地命令（/new /tokens）
+        // 冲突时 register 抛 IllegalStateException → 启动立即终止（F2/AC16）
+        dinocode.command.Builtins.registerAll(cmdRegistry);
+        cmdRegistry.register(dinocode.command.Command.of("new", "开启新会话", dinocode.command.Kind.UI,
+                (cancelled, ui) -> clearAndNewSession()));
+        cmdRegistry.register(dinocode.command.Command.of("tokens",
+                "查看或设置最大输出 (/tokens low|medium|high|max|<数值>)", dinocode.command.Kind.LOCAL,
+                (cancelled, ui) -> ui.println("用法: /tokens 已由启动参数与 /tokens 旧接口管理；当前会话最大输出 "
+                        + currentMaxTokens())));
     }
 
     /** ch09：注入存档/记忆组件（Main 在构造后链式调用）。 */
@@ -110,14 +119,17 @@ public final class Tui {
                     .encoding(StandardCharsets.UTF_8)
                     .build();
             terminal.handle(Terminal.Signal.INT, signal -> onInterrupt());
-            reader = LineReaderBuilder.builder().terminal(terminal).build();
+            reader = LineReaderBuilder.builder()
+                    .terminal(terminal)
+                    .completer(new SlashCompleter(cmdRegistry)) // ch10 F24：/ 补全（Tab 触发）
+                    .build();
             // Shift+Tab（终端发送 ESC[Z）展开为 /mode 命令提交（ch06 F7，IDLE 态循环切换）
             bindShiftTab(reader);
             renderer = new Renderer(terminal.writer());
 
             Banner.print(terminal.writer(), config,
                     restored ? "已恢复上次会话 " + session.getId() : "新会话");
-            renderer.notice("提示: Shift+Tab 切换权限模式，/plan 进入计划模式（只读工具），/do 按计划执行，/help 查看命令");
+            renderer.notice("提示: Shift+Tab 切换权限模式，Tab 补全斜杠命令，/help 查看全部命令");
 
             loop();
             return 0;
@@ -191,54 +203,205 @@ public final class Tui {
             renderer.notice("权限模式: " + mode.displayName() + "（Shift+Tab 继续切换）");
             return true;
         }
-        // ch08 F21/F22：/compact 手动压缩（跳过阈值与熔断，无条件触发摘要）
-        if ("/compact".equals(input)) {
-            handleCompact();
-            return true;
-        }
-        // ch09 F17~F24：/resume 从历史会话列表恢复（仅空闲态可用，F46）
-        if ("/resume".equals(input)) {
-            handleResume();
-            return true;
-        }
-        // /plan 与 /do 仍为计划工作流专用入口/出口（/do 固定回 default）
-        if ("/plan".equals(input)) {
-            mode = Mode.PLAN;
-            renderer.notice("已进入计划模式（只读工具）。产出计划后用 /do 执行。");
-            return true;
-        }
-        if ("/do".equals(input)) {
-            if (mode != Mode.PLAN) {
-                renderer.notice("当前不在计划模式，/do 仅用于执行 /plan 产出的计划。");
-                return true;
-            }
-            mode = Mode.DEFAULT;
-            renderer.notice("已切回默认模式，按计划开始执行。");
-            turn(Reminder.EXECUTE_DIRECTIVE, false); // 指令本身不入历史
-            return true;
-        }
+        return dispatchSlash(input); // ch10：统一走命令注册中心（LOCAL/UI/PROMPT 三类）
+    }
 
-        CommandHandler.Result result = CommandHandler.handle(input, currentMaxTokens());
-        switch (result.action()) {
-            case EXIT -> {
-                renderer.notice("再见 🦖");
-                saveSessionQuietly();
-                return false;
-            }
-            case NEW_SESSION -> {
-                saveSessionQuietly();
-                session = new Session(SessionStore.newSessionId(),
-                        System.currentTimeMillis(), new ArrayList<>(), SessionSettings.EMPTY);
-                renderer.notice("已开启新会话 " + session.getId());
-            }
-            case TOKENS_SET -> {
-                session.setSettings(new SessionSettings(result.tokens()));
-                saveSessionQuietly();
-                renderer.notice("已设置最大输出为 " + result.tokens());
-            }
-            case PRINT -> renderer.notice(result.message());
+    // ==================== ch10 命令注册中心集成 ====================
+
+    private final dinocode.command.CommandRegistry cmdRegistry = new dinocode.command.CommandRegistry();
+
+    /** 斜杠分发（ch10 F3~F7）："/" 开头走注册中心；返回 false 表示应退出。 */
+    private boolean dispatchSlash(String input) {
+        var parsed = dinocode.command.Dispatch.parse(input);
+        if (!parsed.isSlash()) {
+            return true; // 调用方已保证以 / 开头，防御分支
+        }
+        var cmdOpt = cmdRegistry.lookup(parsed.name());
+        if (cmdOpt.isEmpty()) {
+            renderer.notice("未知命令" + (parsed.name().isEmpty() ? "" : ": " + parsed.name())
+                    + "。输入 /help 查看可用命令"); // F6/N7：提示文案引导 /help
+            return true;
+        }
+        var cmd = cmdOpt.get();
+        // N3a：UI/PROMPT 类命令仅在空闲态可执行
+        if (cmd.kind() != dinocode.command.Kind.LOCAL && generating) {
+            renderer.failure("请等待当前任务完成");
+            return true;
+        }
+        try {
+            cmd.handler().handle(new java.util.concurrent.atomic.AtomicBoolean(false), asUi());
+        } catch (ExitRequested exit) {
+            return false; // /exit：终止主循环
+        } catch (Exception e) {
+            renderer.failure("命令执行失败: " + (e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage()));
         }
         return true;
+    }
+
+    /** Tui 的 Ui 抽象实现（F33）：handler 通过此视图操作 TUI。 */
+    private UiView asUi() {
+        return new UiView(this);
+    }
+
+    /** /exit 的内部控制流信号（dispatcher 捕获后终止主循环）。 */
+    static final class ExitRequested extends RuntimeException {
+        ExitRequested() {
+            super(null, null, false, false);
+        }
+    }
+
+    /**
+     * Ui 接口的 Tui 实现（静态嵌套类，避免 Tui 直接 implements 泄漏接口到构造期）。
+     * 全部方法在用户输入线程同步执行（N1 本地命令无可观察延迟）。
+     */
+    private static final class UiView implements dinocode.command.Ui {
+        private final Tui tui;
+
+        UiView(Tui tui) {
+            this.tui = tui;
+        }
+
+        @Override
+        public void println(String msg) {
+            tui.renderer.notice(msg);
+        }
+
+        @Override
+        public void error(String msg) {
+            tui.renderer.failure(msg);
+        }
+
+        @Override
+        public Mode mode() {
+            return tui.mode;
+        }
+
+        @Override
+        public void setMode(Mode m) {
+            tui.mode = m;
+        }
+
+        @Override
+        public void injectAndSend(String displayLabel, String presetPrompt) {
+            // N3：与真实用户消息同路径——写入历史 + 存档回调触发 + 触发回合
+            if ("/do".equals(displayLabel)) {
+                // /do 保持 ch04 语义：指令本身不入历史（N10 外部行为不变）
+                tui.mode = Mode.DEFAULT;
+                tui.renderer.notice("已切回默认模式，按计划开始执行。");
+                tui.turn(presetPrompt, false);
+                return;
+            }
+            tui.turn(presetPrompt, true);
+        }
+
+        @Override
+        public long usageIn() {
+            return tui.usageIn;
+        }
+
+        @Override
+        public long usageOut() {
+            return tui.usageOut;
+        }
+
+        @Override
+        public String modelName() {
+            return tui.provider.model();
+        }
+
+        @Override
+        public String cwd() {
+            return System.getProperty("user.dir");
+        }
+
+        @Override
+        public int toolCount() {
+            return tui.registry.count();
+        }
+
+        @Override
+        public List<String> memoryFiles() {
+            var files = tui.memMgr != null ? tui.memMgr.listFiles() : null;
+            if (files == null) {
+                return List.of();
+            }
+            List<String> out = new ArrayList<>(files.project());
+            out.addAll(files.user());
+            return out;
+        }
+
+        @Override
+        public String sessionPath() {
+            return tui.archiveWriter != null ? tui.archiveWriter.file().toString() : "";
+        }
+
+        @Override
+        public String sessionId() {
+            return tui.compact != null && tui.compact.session() != null
+                    ? tui.compact.session().sessionId() : "";
+        }
+
+        @Override
+        public void quit() {
+            // N12：先取消进行中的回合再请求退出
+            tui.renderer.notice("再见 🦖");
+            tui.saveSessionQuietly();
+            CancelToken cancel = tui.turnCancel;
+            if (cancel != null) {
+                cancel.cancel();
+            }
+            throw new ExitRequested(); // dispatcher 捕获 → 主循环 return false
+        }
+
+        @Override
+        public void forceCompact() {
+            tui.handleCompact();
+        }
+
+        @Override
+        public void openResumeMenu() {
+            tui.handleResume();
+        }
+
+        @Override
+        public void clearAndNewSession() {
+            tui.clearAndNewSession();
+        }
+
+        @Override
+        public boolean idle() {
+            return !tui.generating;
+        }
+    }
+
+    /** /clear（ch10 F17/AC8）：关旧存档 → 开新会话目录与存档 → 清空内存消息与用量。 */
+    private void clearAndNewSession() {
+        try {
+            if (archiveWriter != null) {
+                archiveWriter.close(); // 旧 JSONL 保留在磁盘（N9：/resume 仍可见）
+            }
+        } catch (IOException e) {
+            renderer.failure("旧会话存档关闭失败: " + e.getMessage());
+        }
+        saveSessionQuietly(); // 旧 JSON 格式会话也收尾
+        Session newSession = new Session(SessionStore.newSessionId(),
+                System.currentTimeMillis(), new ArrayList<>(), SessionSettings.EMPTY);
+        if (compact != null) {
+            compact.resetForNewSession(dinocode.compact.state.SessionContext.create(workspace));
+        }
+        if (archiveWriter != null && compact != null) {
+            try {
+                archiveWriter = dinocode.session.archive.Writer.create(
+                        compact.session().sessionDir());
+                newSession.setArchiveCallbacks(archiveWriter::archiveAppend, archiveWriter::archiveReplace);
+            } catch (IOException e) {
+                renderer.failure("新会话存档开启失败: " + e.getMessage());
+                archiveWriter = null;
+            }
+        }
+        session = newSession;
+        usageIn = 0; // F17：累计 token 归零
+        usageOut = 0;
     }
 
     private void turn(String input) {
@@ -260,8 +423,8 @@ public final class Tui {
                     session.getMessages(), compact.getAnchorMsgLen());
             ContextCompactor.Result r = ContextCompactor.manage(new ContextCompactor.Input(
                     session.getMessages(), provider, compact.contextWindow,
-                    registry.definitions(), compact.replacement, compact.recovery,
-                    compact.autoTracking, compact.session(),
+                    registry.definitions(), compact.replacement(), compact.recovery(),
+                    compact.autoTracking(), compact.session(),
                     compact.getUsageAnchor(), compact.getAnchorMsgLen(), before,
                     ContextCompactor.TriggerKind.MANUAL));
             if (r.newMsgs() != null) {

@@ -289,7 +289,7 @@ public final class Agent {
                 }
                 ContextCompactor.Result r = ContextCompactor.manage(new ContextCompactor.Input(
                         history, provider, compact.contextWindow, defs,
-                        compact.replacement, compact.recovery, compact.autoTracking, compact.session(),
+                        compact.replacement(), compact.recovery(), compact.autoTracking(), compact.session(),
                         anchor, anchorLen, est, ContextCompactor.TriggerKind.AUTO));
                 if (r.newMsgs() != null) {
                     history.clear();
@@ -325,7 +325,7 @@ public final class Agent {
         try {
             ContextCompactor.Result r = ContextCompactor.manage(new ContextCompactor.Input(
                     history, provider, compact.contextWindow, defs,
-                    compact.replacement, compact.recovery, compact.autoTracking, compact.session(),
+                    compact.replacement(), compact.recovery(), compact.autoTracking(), compact.session(),
                     0, 0, Token.estimateTokens(0, history, 0),
                     ContextCompactor.TriggerKind.EMERGENCY));
             if (r.newMsgs() != null) {
@@ -367,7 +367,7 @@ public final class Agent {
                 if (pathObj instanceof String path && !path.isBlank()) {
                     java.nio.file.Path abs = java.nio.file.Path.of(path)
                             .toAbsolutePath().normalize();
-                    compact.recovery.recordFile(abs.toString(),
+                    compact.recovery().recordFile(abs.toString(),
                             java.nio.file.Files.readString(abs));
                 }
             } catch (Exception e) {

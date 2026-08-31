@@ -238,6 +238,33 @@ public final class Memory {
             this.provider = provider;
         }
 
+        /**
+         * ch10 T0a：列出两级 memory 目录下的 .md 文件名（含 MEMORY.md），
+         * 各自按文件名字典序排序；目录不存在视为空（/memory 命令数据源）。
+         */
+        public FilesList listFiles() {
+            return new FilesList(listMdFiles(projectStore.dir()), listMdFiles(userStore.dir()));
+        }
+
+        private static List<String> listMdFiles(Path dir) {
+            if (!Files.isDirectory(dir)) {
+                return List.of();
+            }
+            try (var stream = Files.list(dir)) {
+                return stream.map(f -> f.getFileName().toString())
+                        .filter(n -> n.endsWith(".md"))
+                        .sorted()
+                        .toList();
+            } catch (IOException e) {
+                LOG.warning("[memory] 列出文件失败: " + e.getMessage());
+                return List.of();
+            }
+        }
+
+        /** 两级记忆文件名清单（ch10 /memory 命令数据源）。 */
+        public record FilesList(List<String> project, List<String> user) {
+        }
+
         /** 合并两级索引（项目级在前），截断到 25KB（F32~F34/AC23/AC26）。 */
         public String loadIndex() {
             String merged = projectStore.loadIndex() + userStore.loadIndex();

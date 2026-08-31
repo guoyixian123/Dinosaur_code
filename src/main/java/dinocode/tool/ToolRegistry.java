@@ -42,6 +42,11 @@ public final class ToolRegistry {
         return defs;
     }
 
+    /** 已注册工具数量（ch10 /status 数据源）。 */
+    public int count() {
+        return tools.size();
+    }
+
     /** 仅导出只读工具定义（ch04 Plan Mode，F10）。 */
     public List<ToolDefinition> readOnlyDefinitions() {
         List<ToolDefinition> defs = new ArrayList<>();
