@@ -3,12 +3,20 @@ package dinocode.agent;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dinocode.core.ChatEvent;
+import dinocode.core.ErrorKind;
 import dinocode.core.Message;
 import dinocode.core.Role;
 import dinocode.core.ToolCall;
 import dinocode.core.ToolDefinition;
 import dinocode.core.ToolResult;
 import dinocode.core.Usage;
+import dinocode.permission.Mode;
+import dinocode.permission.Outcome;
+import dinocode.permission.PermissionEngine;
+import dinocode.compact.CompactConstants;
+import dinocode.compact.CompactException;
+import dinocode.compact.ContextCompactor;
+import dinocode.compact.Token;
 import dinocode.provider.ChatProvider;
 import dinocode.provider.ChatRequest;
 import dinocode.provider.EventStream;
@@ -18,10 +26,12 @@ import dinocode.prompt.Reminder;
 import dinocode.tool.Result;
 import dinocode.tool.ToolRegistry;
 
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
@@ -38,6 +48,7 @@ import java.util.concurrent.atomic.AtomicReference;
  * for 迭代——带工具发请求 → 流式收集 → 有工具则执行并回灌进入下一轮；无工具则纯文本即最终答复。
  * 停止条件：自然完成 / 迭代上限 / 用户取消 / 连续未知工具 / 流出错（F2）。
  * 保序分批并发执行：连续只读并发、有副作用串行、保持调用序（F5）。
+ * ch06：每次执行前过五层权限流水线（引擎前四层 + 人在回路第五层）；Deny 回灌不中断（F9）。
  */
 public final class Agent {
 
@@ -50,16 +61,47 @@ public final class Agent {
     private final ChatProvider provider;
     private final ToolRegistry registry;
     private final String version;
+    private final PermissionEngine engine;
+    /** ch08：上下文管理长生命周期状态；null 表示禁用压缩（测试/向后兼容）。 */
+    private final CompactContext compact;
+    /** 测试用：预置的人在回路决策队列；非 null 时 requestApproval 从此取决策（null=取消）。 */
+    private final java.util.Deque<Outcome> scriptedOutcomes;
 
-    public Agent(ChatProvider provider, ToolRegistry registry, String version) {
+    public Agent(ChatProvider provider, ToolRegistry registry, String version, PermissionEngine engine) {
+        this(provider, registry, version, engine, null, null);
+    }
+
+    /** 测试用：预置人在回路决策（依序消费；耗尽后阻塞等待真实回传）。 */
+    public Agent(ChatProvider provider, ToolRegistry registry, String version, PermissionEngine engine,
+                 java.util.Deque<Outcome> scriptedOutcomes) {
+        this(provider, registry, version, engine, null, scriptedOutcomes);
+    }
+
+    /** 完整构造：ch08 上下文管理启用。 */
+    public Agent(ChatProvider provider, ToolRegistry registry, String version, PermissionEngine engine,
+                 CompactContext compact, java.util.Deque<Outcome> scriptedOutcomes) {
         this.provider = provider;
         this.registry = registry;
         this.version = version == null ? "" : version;
+        this.engine = engine;
+        this.compact = compact;
+        this.scriptedOutcomes = scriptedOutcomes;
+    }
+
+    /** 测试/无权限场景的便捷构造：跳过权限判定（全放行）。 */
+    public Agent(ChatProvider provider, ToolRegistry registry, String version) {
+        this(provider, registry, version, PermissionEngine.allowAll(), null, null);
+    }
+
+    /** 无权限引擎但有压缩上下文（Main/Tui 主构造路径）。 */
+    public Agent(ChatProvider provider, ToolRegistry registry, String version, PermissionEngine engine,
+                 CompactContext compact) {
+        this(provider, registry, version, engine, compact, null);
     }
 
     /**
-     * @param mode   决定工具集与按轮次提醒（F7/F10）
-     * @param cancel per-turn 取消句柄（F7）
+     * @param mode   决定工具集与按轮次提醒（ch05 F7 / ch06 F5）
+     * @param cancel per-turn 取消句柄（ch04 F7）
      */
     public TurnStream run(List<Message> history, int maxTokens, Mode mode, CancelToken cancel) {
         List<ToolDefinition> defs = mode == Mode.PLAN
@@ -145,15 +187,31 @@ public final class Agent {
                 reminder = Reminder.plan(full);
             }
 
-            StreamOutcome out = streamOnce(history, maxTokens, defs, stable, envText, reminder,
-                    cancel, queue, currentStream);
-            if (out.failed) {
-                if (cancel.isCancelled()) {
-                    return finishCancelled(history, queue);
+            // ch08：每轮请求前上下文管理（Layer1 预防 + 阈值判断 + 自动 Layer2）
+            boolean emergencyRetried = false;
+            StreamOutcome out;
+            try {
+                out = streamWithCompact(history, maxTokens, defs, stable, envText, reminder,
+                        mode, cancel, queue, currentStream, true);
+            } catch (StreamFailure f) {
+                // 紧急压缩路径（F25/F26）：PTL → EMERGENCY 压缩 → 重试一次
+                if (f.overflow && compact != null && !emergencyRetried) {
+                    queue.put(new TurnEvent.Notice("上下文撞墙，自动压缩中..."));
+                    if (!runEmergencyCompact(history, defs, mode, queue)) {
+                        return new TurnEvent.Error("紧急压缩失败");
+                    }
+                    emergencyRetried = true;
+                    try {
+                        out = streamWithCompact(history, maxTokens, defs, stable, envText, reminder,
+                                mode, cancel, queue, currentStream, false);
+                    } catch (StreamFailure f2) {
+                        queue.put(new TurnEvent.Error(f2.message));
+                        return new TurnEvent.Error(f2.message);
+                    }
+                } else {
+                    queue.put(new TurnEvent.Error(f.message));
+                    return new TurnEvent.Error(f.message);
                 }
-                queue.put(new TurnEvent.Notice(AgentConstants.NOTICE_STREAM_ERR));
-                ensureAssistantTail(history, AgentConstants.NOTICE_STREAM_ERR);
-                return new TurnEvent.Error(AgentConstants.NOTICE_STREAM_ERR);
             }
             lastUsage = out.usage;
             queue.put(new TurnEvent.UsageReport(out.usage));
@@ -173,7 +231,8 @@ public final class Agent {
                 unknownRun = 0;
             }
 
-            BatchOutcome batch = executeBatched(out.calls(), cancel, queue);
+            BatchOutcome batch = executeBatched(out.calls(), mode, cancel, queue);
+            recordReadFiles(out.calls(), batch.results());
             history.add(Message.tool(batch.results())); // 无论取消都回灌，含已取消占位（F6）
 
             if (!batch.completed()) { // 执行中被取消：最高优先级收尾
@@ -190,6 +249,125 @@ public final class Agent {
         queue.put(new TurnEvent.Notice(AgentConstants.NOTICE_MAX_ITER));
         ensureAssistantTail(history, AgentConstants.NOTICE_MAX_ITER);
         return new TurnEvent.Done(lastUsage);
+    }
+
+    /** streamOnce + 紧凑上下文管理（AUTO 路径）+ 锚点更新；updateAnchor=false 用于紧急重试（锚点已重置）。 */
+    private StreamOutcome streamWithCompact(List<Message> history, int maxTokens, List<ToolDefinition> defs,
+                                            String stable, String envText, String reminder, Mode mode,
+                                            CancelToken cancel, BlockingQueue<TurnEvent> queue,
+                                            AtomicReference<EventStream> currentStream,
+                                            boolean updateAnchor) throws InterruptedException {
+        // ch08：请求前上下文管理（compact == null 时跳过，兼容旧测试）
+        if (compact != null) {
+            boolean willSummarize = false;
+            try {
+                long anchor = compact.getUsageAnchor();
+                int anchorLen = compact.getAnchorMsgLen();
+                long est = Token.estimateTokens(anchor, history, anchorLen);
+                willSummarize = est >= compact.contextWindow
+                        - CompactConstants.SUMMARY_RESERVE - CompactConstants.AUTO_SAFETY_MARGIN;
+                if (willSummarize) {
+                    queue.put(new TurnEvent.Notice("正在压缩上下文..."));
+                }
+                ContextCompactor.Result r = ContextCompactor.manage(new ContextCompactor.Input(
+                        history, provider, compact.contextWindow, defs,
+                        compact.replacement, compact.recovery, compact.autoTracking, compact.session,
+                        anchor, anchorLen, est, ContextCompactor.TriggerKind.AUTO));
+                if (r.newMsgs() != null) {
+                    history.clear();
+                    history.addAll(r.newMsgs()); // Layer1 替换体 / Layer2 摘要历史写回（in-place，run 持有同一列表）
+                }
+                if (willSummarize) {
+                    queue.put(new TurnEvent.Notice(String.format("已压缩，token 从 %d 降至 %d",
+                            r.beforeTokens(), r.afterTokens())));
+                }
+            } catch (CompactException e) {
+                if (willSummarize) {
+                    queue.put(new TurnEvent.Notice("压缩失败: " + e.getMessage()));
+                }
+            }
+        }
+
+        StreamOutcome out = streamOnce(history, maxTokens, defs, stable, envText, reminder,
+                cancel, queue, currentStream);
+        // 锚点更新（F14/AC22）：主对话路径替换（非累加）；紧急重试路径锚点已重置不重复更新
+        if (compact != null && updateAnchor && out.usage() != null
+                && out.usage().inputTokens() != null) {
+            compact.updateAnchor(Token.usageAnchor(out.usage()), history.size());
+        }
+        return out;
+    }
+
+    /** 紧急压缩（F25）：先 Layer1 落盘大结果，再强制摘要重建历史；成功返回 true。 */
+    private boolean runEmergencyCompact(List<Message> history, List<ToolDefinition> defs, Mode mode,
+                                        BlockingQueue<TurnEvent> queue) throws InterruptedException {
+        if (compact == null) {
+            return false;
+        }
+        try {
+            ContextCompactor.Result r = ContextCompactor.manage(new ContextCompactor.Input(
+                    history, provider, compact.contextWindow, defs,
+                    compact.replacement, compact.recovery, compact.autoTracking, compact.session,
+                    0, 0, Token.estimateTokens(0, history, 0),
+                    ContextCompactor.TriggerKind.EMERGENCY));
+            if (r.newMsgs() != null) {
+                history.clear();
+                history.addAll(r.newMsgs()); // 摘要后的新历史
+            }
+            compact.updateAnchor(0, 0); // 历史已重建，锚点重置（F25a）
+            long est = Token.estimateTokens(0, history, 0);
+            if (est >= compact.contextWindow - CompactConstants.MANUAL_SAFETY_MARGIN) {
+                queue.put(new TurnEvent.Error("紧急压缩后仍超出上下文窗口，无法恢复"));
+                return false;
+            }
+            return true;
+        } catch (CompactException e) {
+            queue.put(new TurnEvent.Error("紧急压缩失败: " + e.getMessage()));
+            return false;
+        }
+    }
+
+    /**
+     * ch08 F19：ReadFile 成功后重读纯净内容记录到 recovery（恢复段数据源）。
+     * 在工具结果回灌前同步执行（F19a）。
+     */
+    private void recordReadFiles(List<ToolCall> calls, List<ToolResult> results) {
+        if (compact == null) {
+            return;
+        }
+        for (int i = 0; i < calls.size() && i < results.size(); i++) {
+            ToolCall call = calls.get(i);
+            ToolResult r = results.get(i);
+            if (!"ReadFile".equals(call.name()) || r.isError()) {
+                continue;
+            }
+            try {
+                Map<String, Object> args = JSON.readValue(call.arguments(),
+                        new TypeReference<Map<String, Object>>() {
+                        });
+                Object pathObj = args.get("path");
+                if (pathObj instanceof String path && !path.isBlank()) {
+                    java.nio.file.Path abs = java.nio.file.Path.of(path)
+                            .toAbsolutePath().normalize();
+                    compact.recovery.recordFile(abs.toString(),
+                            java.nio.file.Files.readString(abs));
+                }
+            } catch (Exception e) {
+                // 读盘失败：recovery 缺一条无所谓（F19 降级）
+            }
+        }
+    }
+
+    /** 流失败内部信号：区分上下文超限（触发紧急压缩）与其他错误。 */
+    private static final class StreamFailure extends RuntimeException {
+        final String message;
+        final boolean overflow;
+
+        StreamFailure(String message, boolean overflow) {
+            super(message, null, false, false);
+            this.message = message;
+            this.overflow = overflow;
+        }
     }
 
     private TurnEvent finishCancelled(List<Message> history, BlockingQueue<TurnEvent> queue)
@@ -221,7 +399,13 @@ public final class Agent {
                     case ChatEvent.ThinkingDelta t -> queue.put(new TurnEvent.Thinking(t.text()));
                     case ChatEvent.ToolCallComplete tc -> calls.add(tc.call());
                     case ChatEvent.Done d -> usage = d.usage() == null ? Usage.UNKNOWN : d.usage();
-                    case ChatEvent.Failure f -> queue.put(new TurnEvent.Error(f.message()));
+                    case ChatEvent.Failure f -> {
+                        // ch08：上下文超限由上层紧急压缩处理；其他错误照旧
+                        if (f.kind() == ErrorKind.CONTEXT_OVERFLOW) {
+                            throw new StreamFailure(f.message(), true);
+                        }
+                        throw new StreamFailure(f.message(), false);
+                    }
                 }
                 if (cancel.isCancelled()) {
                     break;
@@ -234,11 +418,12 @@ public final class Agent {
     }
 
     /**
-     * 保序分批并发执行（F5）：连续只读合批并发，有副作用单个串行，保持调用序。
-     * 事件顺序：Start 按序、End 按序，并发只发生在执行环节（N3）。
+     * 保序分批并发执行（ch04 F5）+ 权限判定（ch06 F6/F9）：
+     * 连续只读合批并发、有副作用单个串行，保持调用序。
+     * 每个调用执行前过权限流水线：Allow 执行、Deny 回灌被拒结果（不中断）、Ask 落人在回路。
      */
-    private BatchOutcome executeBatched(List<ToolCall> calls, CancelToken cancel, BlockingQueue<TurnEvent> queue)
-            throws InterruptedException {
+    private BatchOutcome executeBatched(List<ToolCall> calls, Mode mode, CancelToken cancel,
+                                        BlockingQueue<TurnEvent> queue) throws InterruptedException {
         ToolResult[] results = new ToolResult[calls.size()];
         boolean completed = true;
         int i = 0;
@@ -253,13 +438,50 @@ public final class Agent {
                 while (j < calls.size() && registry.isReadOnly(calls.get(j).name())) {
                     j++;
                 }
-                completed = executeReadOnlyBatch(calls, i, j, results, cancel, queue);
+                completed = executeReadOnlyBatch(calls, i, j, mode, results, cancel, queue);
                 if (!completed) {
                     break;
                 }
                 i = j;
             } else {
                 ToolCall call = calls.get(i);
+
+                // ch06：执行前过权限流水线（Deny 回灌 / Ask 人在回路）
+                PermissionEngine.CheckResult cr = engine.check(mode, call, false);
+                if (cr.decision() == dinocode.permission.Decision.DENY) {
+                    queue.put(new TurnEvent.ToolStart(call.name(), preview(call.arguments())));
+                    results[i] = new ToolResult(call.id(), cr.reason(), true);
+                    queue.put(new TurnEvent.ToolEnd(call.name(), cr.reason(), true));
+                    i++;
+                    continue;
+                }
+                if (cr.decision() == dinocode.permission.Decision.ASK) {
+                    Outcome outcome = requestApproval(call, cr.reason(), queue);
+                    if (outcome == null) { // 取消：走取消收尾
+                        completed = false;
+                        break;
+                    }
+                    switch (outcome) {
+                        case DENY_ONCE -> {
+                            queue.put(new TurnEvent.ToolStart(call.name(), preview(call.arguments())));
+                            results[i] = new ToolResult(call.id(), "用户拒绝了本次" + call.name() + "调用", true);
+                            queue.put(new TurnEvent.ToolEnd(call.name(), results[i].content(), true));
+                            i++;
+                            continue;
+                        }
+                        case ALLOW_FOREVER -> {
+                            try {
+                                engine.persistLocalAllow(call);
+                            } catch (IOException e) {
+                                queue.put(new TurnEvent.Notice("永久放行规则写入失败: " + e.getMessage()));
+                            }
+                        }
+                        case ALLOW_ONCE -> {
+                            // 不留记录，直接执行
+                        }
+                    }
+                }
+
                 queue.put(new TurnEvent.ToolStart(call.name(), preview(call.arguments())));
                 results[i] = executeTool(call, cancel.withTimeout(ToolRegistry.DEFAULT_TIMEOUT));
                 queue.put(new TurnEvent.ToolEnd(call.name(), results[i].content(), results[i].isError()));
@@ -277,10 +499,23 @@ public final class Agent {
         return new BatchOutcome(List.of(results), completed);
     }
 
-    /** 并发执行只读区间 [from, to)；返回 false 表示执行中被取消。 */
-    private boolean executeReadOnlyBatch(List<ToolCall> calls, int from, int to, ToolResult[] results,
-                                         CancelToken cancel, BlockingQueue<TurnEvent> queue)
-            throws InterruptedException {
+    /**
+     * 并发执行只读区间 [from, to)（ch04 F5）；ch06：批内逐个过权限检查，
+     * 只读永不 Ask（N3）——Deny 预置被拒结果不纳入并发，其余照旧并发。
+     * 返回 false 表示执行中被取消。
+     */
+    private boolean executeReadOnlyBatch(List<ToolCall> calls, int from, int to, Mode mode,
+                                         ToolResult[] results, CancelToken cancel,
+                                         BlockingQueue<TurnEvent> queue) throws InterruptedException {
+        // 权限预判：Deny 预置结果，其余进入执行
+        boolean[] denied = new boolean[to - from];
+        for (int k = from; k < to; k++) {
+            PermissionEngine.CheckResult cr = engine.check(mode, calls.get(k), true);
+            if (cr.decision() == dinocode.permission.Decision.DENY) {
+                denied[k - from] = true;
+                results[k] = new ToolResult(calls.get(k).id(), cr.reason(), true);
+            }
+        }
         // Start 事件按序
         for (int k = from; k < to; k++) {
             ToolCall call = calls.get(k);
@@ -290,6 +525,10 @@ public final class Agent {
         CountDownLatch latch = new CountDownLatch(to - from);
         for (int k = from; k < to; k++) {
             final int idx = k;
+            if (denied[idx - from]) {
+                latch.countDown(); // 被拒项不执行，直接放行 latch
+                continue;
+            }
             ToolCall call = calls.get(idx);
             CancelToken toolToken = cancel.withTimeout(ToolRegistry.DEFAULT_TIMEOUT);
             Thread.ofVirtual().start(() -> {
@@ -307,6 +546,10 @@ public final class Agent {
         // End 事件按序
         for (int k = from; k < to; k++) {
             ToolCall call = calls.get(k);
+            if (denied[k - from]) {
+                queue.put(new TurnEvent.ToolEnd(call.name(), results[k].content(), true));
+                continue;
+            }
             if (results[k] == null) { // latch 已过仍未写入：超时兜底
                 results[k] = new ToolResult(call.id(), "工具执行超时", true);
             }
@@ -314,6 +557,33 @@ public final class Agent {
             queue.put(new TurnEvent.ToolEnd(call.name(), r.content(), r.isError()));
         }
         return true;
+    }
+
+    /**
+     * 人在回路（ch06 F8 第五层）：发 Approval 事件并阻塞等 TUI 回传决策。
+     *
+     * @return 用户决策；{@code null} 表示等待中被取消（中断），由调用方走取消收尾
+     */
+    private Outcome requestApproval(ToolCall call, String reason, BlockingQueue<TurnEvent> queue)
+            throws InterruptedException {
+        ArrayBlockingQueue<Outcome> respond = new ArrayBlockingQueue<>(1);
+        queue.put(new TurnEvent.Approval(new ApprovalRequest(
+                call.name(), preview(call.arguments()), reason, respond)));
+        // 测试脚本预置决策：直接消费，不经 TUI 回传
+        if (scriptedOutcomes != null) {
+            Outcome scripted = scriptedOutcomes.poll();
+            if (scripted != null) {
+                return scripted;
+            }
+        }
+        try {
+            Outcome outcome = respond.take();
+            // 用户批准后工具行照常展示
+            return outcome;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return null;
+        }
     }
 
     /** 单工具执行：30s 超时兜底（N1）。 */

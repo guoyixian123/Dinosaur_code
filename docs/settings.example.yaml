@@ -1,0 +1,27 @@
+# Dino Code 权限配置示例（ch06）
+#
+# 三层配置文件（优先级：本地 > 项目 > 用户，就近命中即止；同层 deny 优先于 allow）：
+#   用户级: ~/.dino/settings.yaml           — 个人全局偏好
+#   项目级: <项目根>/.dino/settings.yaml     — 可提交到 git，团队共享
+#   本地级: <项目根>/.dino/settings.local.yaml — 人在回路「永久允许」自动写入，已被 gitignore
+#
+# defaultMode 可选: default / acceptEdits / plan / bypassPermissions
+# 规则格式: 「工具名(模式)」；工具名用友好名 Bash/Read/Write/Edit/Glob/Grep；
+# 模式支持精确匹配与 glob（* 任意字符、** 跨目录段）；不带括号匹配该工具全部调用。
+#
+# 说明：只读类（Read/Glob/Grep）默认即 Allow；allow 规则主要用于提前放行
+# Bash/Write；deny 规则可对只读做围栏（如 Read(.env)）。
+#
+# 危险命令黑名单为内置正则，不可通过本文件放开或关闭。
+
+defaultMode: default
+
+permissions:
+  allow:
+    - "Bash(git status)"
+    - "Bash(git diff *)"
+    - "Bash(mvn test)"
+  deny:
+    - "Bash(git push --force*)"
+    - "Read(.env)"
+    - "Write(.env)"

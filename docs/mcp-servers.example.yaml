@@ -1,0 +1,28 @@
+# Dino Code MCP server 配置示例（ch07）
+#
+# 放置位置（两层，按 server 名合并，同名项目级完整覆盖用户级）：
+#   用户级: ~/.dino/mcp.yaml
+#   项目级: <项目根>/.dino/mcp.yaml
+#
+# env / headers 的值支持 ${VAR} 从宿主环境变量展开（密钥不落盘，N6）；
+# 未定义变量展开为空串并告警；command / args / server 名 / 工具名不做展开。
+# 每个 server 的启动序列受 30s 超时约束；单个 server 失败只跳过自身，不影响启动。
+
+mcp_servers:
+  github:
+    type: stdio
+    command: npx
+    args: ["-y", "@modelcontextprotocol/server-github"]
+    env:
+      GITHUB_TOKEN: "${GITHUB_TOKEN}"
+
+  local-sqlite:
+    type: stdio
+    command: python
+    args: ["-m", "mcp_server_sqlite", "--db", "./data.db"]
+
+  example-http:
+    type: http
+    url: "https://mcp.example.com/mcp"
+    headers:
+      Authorization: "Bearer ${EXAMPLE_TOKEN}"

@@ -3,6 +3,7 @@ package dinocode.agent;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import dinocode.core.Message;
+import dinocode.permission.Mode;
 import dinocode.provider.OpenAiProvider;
 import dinocode.tool.Result;
 import dinocode.tool.Tool;
@@ -111,7 +112,7 @@ class AgentHttpE2eTest {
 
         List<TurnEvent> events = new ArrayList<>();
         TurnEvent event;
-        try (TurnStream stream = new Agent(provider, registry, "test").run(history, 4096, Mode.NORMAL, new CancelToken())) {
+        try (TurnStream stream = new Agent(provider, registry, "test").run(history, 4096, Mode.DEFAULT, new CancelToken())) {
             while ((event = stream.next()) != null) {
                 events.add(event);
             }

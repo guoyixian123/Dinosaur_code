@@ -24,6 +24,16 @@ final class Spinner {
         thread.start();
     }
 
+    /** 仅停止动画（不清行、不 join），供暂停-恢复场景（ch06 人在回路）。 */
+    void ensureStopped() {
+        running = false;
+        try {
+            thread.join(200);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
     /** 停止并清掉指示行（幂等）。 */
     void stop() {
         running = false;

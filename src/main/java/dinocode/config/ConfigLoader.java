@@ -80,7 +80,17 @@ public final class ConfigLoader {
 
         ThinkingConfig thinking = parseThinking(root == null ? null : root.get("thinking"));
 
-        return new AppConfig(protocol, model, baseUrl, apiKey, maxTokens, thinking);
+        // ch08 F30：可选 context_window（token）；0 或未配置走协议默认
+        int contextWindow = 0;
+        JsonNode cwNode = root == null ? null : root.get("context_window");
+        if (cwNode != null && !cwNode.isNull()) {
+            if (!cwNode.canConvertToInt() || cwNode.asInt() < 0) {
+                throw new ConfigException("配置中 context_window 无效: 必须是非负整数");
+            }
+            contextWindow = cwNode.asInt();
+        }
+
+        return new AppConfig(protocol, model, baseUrl, apiKey, maxTokens, thinking, contextWindow);
     }
 
     /** 默认配置路径：~/.dino/config.yaml */

@@ -33,6 +33,39 @@ class ConfigLoaderTest {
                 """;
     }
 
+    // ---------- ch08: context_window（F30/F31/AC20） ----------
+
+    @Test
+    void contextWindowUnconfiguredFallsBackToProtocolDefault() throws Exception {
+        AppConfig anthropic = ConfigLoader.load(write("model: m\napi_key: k\nprotocol: anthropic\n"), Map.of());
+        assertEquals(200000, anthropic.effectiveContextWindow());
+        AppConfig openai = ConfigLoader.load(write("model: m\napi_key: k\nprotocol: openai\n"), Map.of());
+        assertEquals(128000, openai.effectiveContextWindow());
+    }
+
+    @Test
+    void contextWindowZeroFallsBackToDefault() throws Exception {
+        AppConfig config = ConfigLoader.load(write(
+                "model: m\napi_key: k\nprotocol: openai\ncontext_window: 0\n"), Map.of());
+        assertEquals(128000, config.effectiveContextWindow());
+    }
+
+    @Test
+    void contextWindowPositiveOverrides() throws Exception {
+        AppConfig config = ConfigLoader.load(write(
+                "model: m\napi_key: k\nprotocol: anthropic\ncontext_window: 100000\n"), Map.of());
+        assertEquals(100000, config.contextWindow());
+        assertEquals(100000, config.effectiveContextWindow());
+        // 自动阈值 = 100000 - 33000 = 67000（AC20 由 compact 包测试覆盖行为）
+    }
+
+    @Test
+    void contextWindowInvalidValueFails() throws Exception {
+        Path file = write("model: m\napi_key: k\ncontext_window: -5\n");
+        ConfigException e = loadFails(file, Map.of());
+        assertTrue(e.getMessage().startsWith("配置中 context_window 无效"), e.getMessage());
+    }
+
     private ConfigException loadFails(Path path, Map<String, String> env) {
         return assertThrows(ConfigException.class, () -> ConfigLoader.load(path, env));
     }

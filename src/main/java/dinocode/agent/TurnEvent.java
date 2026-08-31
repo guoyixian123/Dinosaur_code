@@ -1,6 +1,9 @@
 package dinocode.agent;
 
 import dinocode.core.Usage;
+import dinocode.permission.Outcome;
+
+import java.util.concurrent.BlockingQueue;
 
 /**
  * Agent Loop 对外事件流（sealed，TUI 按变体渲染）。比 core.ChatEvent 高一层，含工具行与循环进度语义。
@@ -33,6 +36,10 @@ public sealed interface TurnEvent {
 
     /** 系统提示（停止原因等）；仅 UI 展示，不入历史（ch04 F2）。 */
     record Notice(String message) implements TurnEvent {
+    }
+
+    /** 人在回路：待用户批准的工具调用（ch06 F8）。消费者必须向 respond 回传决策，否则 agent 永远阻塞；取消路径由 TUI 兜底回传 DENY_ONCE 解阻塞。 */
+    record Approval(ApprovalRequest request) implements TurnEvent {
     }
 
     /** 本轮（整个 Loop）结束。 */

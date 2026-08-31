@@ -5,6 +5,8 @@ import dinocode.core.Message;
 import dinocode.core.Role;
 import dinocode.core.ToolCall;
 import dinocode.core.Usage;
+import dinocode.permission.Mode;
+import dinocode.permission.PermissionEngine;
 import dinocode.provider.ChatProvider;
 import dinocode.provider.ChatRequest;
 import dinocode.provider.EventStream;
@@ -25,9 +27,14 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * ReAct 循环单测（ch04 AC1–AC9、AC13）：多轮 fake provider、并发分批、停止条件、Plan 工具集。
+ * ReAct 循环单测（ch04 AC1–AC9、AC13 + ch06 权限集成）：多轮 fake provider、并发分批、
+ * 停止条件、Plan 工具集、五层权限（Deny 回灌 / Ask 人在回路 / 永久放行）。
  */
 class AgentTest {
+
+    /** 权限沙箱项目根（每个测试独立临时目录）。 */
+    @org.junit.jupiter.api.io.TempDir
+    java.nio.file.Path root;
 
     private static final class FakeStream implements EventStream {
         private final List<ChatEvent> events;
@@ -144,7 +151,7 @@ class AgentTest {
         registry.register(new FakeTool("Ro", true));
         List<Message> history = history();
 
-        List<TurnEvent> events = drain(new Agent(provider, registry, "test").run(history, 4096, Mode.NORMAL, new CancelToken()));
+        List<TurnEvent> events = drain(new Agent(provider, registry, "test").run(history, 4096, Mode.DEFAULT, new CancelToken()));
 
         // 三轮迭代（2 轮工具 + 1 轮最终答复）+ Done
         assertEquals(3, events.stream().filter(e -> e instanceof TurnEvent.Iter).count());
@@ -172,7 +179,7 @@ class AgentTest {
         registry.register(new FakeTool("Ro", true));
         List<Message> history = history();
 
-        List<TurnEvent> events = drain(new Agent(provider, registry, "test").run(history, 4096, Mode.NORMAL, new CancelToken()));
+        List<TurnEvent> events = drain(new Agent(provider, registry, "test").run(history, 4096, Mode.DEFAULT, new CancelToken()));
 
         assertEquals(AgentConstants.MAX_ITERATIONS, provider.callCount());
         assertTrue(events.stream().anyMatch(e -> e instanceof TurnEvent.Notice n
@@ -193,7 +200,7 @@ class AgentTest {
         registry.register(new FakeTool("Ro", true));
         List<Message> history = history();
 
-        List<TurnEvent> events = drain(new Agent(provider, registry, "test").run(history, 4096, Mode.NORMAL, new CancelToken()));
+        List<TurnEvent> events = drain(new Agent(provider, registry, "test").run(history, 4096, Mode.DEFAULT, new CancelToken()));
 
         assertEquals(AgentConstants.MAX_UNKNOWN_RUN, provider.callCount());
         assertTrue(events.stream().anyMatch(e -> e instanceof TurnEvent.Notice n
@@ -215,7 +222,7 @@ class AgentTest {
         registry.register(new FakeTool("Ro", true));
         List<Message> history = history();
 
-        drain(new Agent(provider, registry, "test").run(history, 4096, Mode.NORMAL, new CancelToken()));
+        drain(new Agent(provider, registry, "test").run(history, 4096, Mode.DEFAULT, new CancelToken()));
 
         assertEquals(6, provider.callCount());
     }
@@ -304,7 +311,7 @@ class AgentTest {
         registry.register(rw);
         List<Message> history = history();
 
-        List<TurnEvent> events = drain(new Agent(provider, registry, "test").run(history, 4096, Mode.NORMAL, new CancelToken()));
+        List<TurnEvent> events = drain(new Agent(provider, registry, "test").run(history, 4096, Mode.DEFAULT, new CancelToken()));
 
         // 两只读确实并发（峰值 ≥2）
         assertTrue(peak.get() >= 2, "只读批应并发，峰值=" + peak.get());
@@ -381,7 +388,7 @@ class AgentTest {
             cancel.cancel();
         });
 
-        List<TurnEvent> events = drain(new Agent(provider, registry, "test").run(history, 4096, Mode.NORMAL, cancel));
+        List<TurnEvent> events = drain(new Agent(provider, registry, "test").run(history, 4096, Mode.DEFAULT, cancel));
 
         // 历史：user → assistant(tool) → tool(含已取消占位) → assistant(取消文案) —— 配对合法
         assertEquals(Role.ASSISTANT, history.get(history.size() - 1).role());
@@ -434,7 +441,7 @@ class AgentTest {
         FakeProvider planProvider = new FakeProvider(List.of(
                 List.of(new ChatEvent.TextDelta("计划"), new ChatEvent.Done(Usage.UNKNOWN))));
 
-        drain(new Agent(provider, registry, "test").run(history, 4096, Mode.NORMAL, new CancelToken()));
+        drain(new Agent(provider, registry, "test").run(history, 4096, Mode.DEFAULT, new CancelToken()));
         drain(new Agent(planProvider, registry, "test").run(planHistory, 4096, Mode.PLAN, new CancelToken()));
 
         // 普通模式全量工具、无 reminder；规划模式只读工具
@@ -480,7 +487,7 @@ class AgentTest {
         List<Message> history = history();
 
         List<TurnEvent> events = drain(new Agent(provider, registry, "test")
-                .run(history, 4096, Mode.NORMAL, new CancelToken()));
+                .run(history, 4096, Mode.DEFAULT, new CancelToken()));
 
         assertTrue(events.stream().anyMatch(e -> e instanceof TurnEvent.UsageReport u
                 && Integer.valueOf(1500).equals(u.usage().cacheWrite())
@@ -502,9 +509,141 @@ class AgentTest {
         registry.register(new FakeTool("Ro", true));
         List<Message> history = history();
 
-        List<TurnEvent> events = drain(new Agent(provider, registry, "test").run(history, 4096, Mode.NORMAL, new CancelToken()));
+        List<TurnEvent> events = drain(new Agent(provider, registry, "test").run(history, 4096, Mode.DEFAULT, new CancelToken()));
 
         assertTrue(events.stream().anyMatch(e -> e instanceof TurnEvent.Error));
         assertEquals(1, provider.callCount());
+    }
+
+    // ---------- ch06 权限集成 ----------
+
+    @Test
+    void denyOutsidePathFeedsErrorBackAndLoopContinues() {
+        // 沙箱：模型请求写项目外路径 → 被拒结果回灌 → Loop 继续 → 次轮最终答复
+        FakeProvider provider = new FakeProvider(List.of(
+                List.of(new ChatEvent.ToolCallComplete(new ToolCall("c1", "WriteFile",
+                        "{\"path\":\"/etc/passwd\"}"))),
+                List.of(new ChatEvent.TextDelta("改路径了"), new ChatEvent.Done(new Usage(1, 1)))));
+
+        ToolRegistry registry = new ToolRegistry();
+        registry.register(new FakeTool("WriteFile", false));
+        List<Message> history = history();
+
+        PermissionEngine engine = PermissionEngine.create(root);
+        List<TurnEvent> events = drain(new Agent(provider, registry, "test", engine)
+                .run(history, 4096, Mode.BYPASS, new CancelToken()));
+
+        // 2 轮迭代：被拒后继续而非终止
+        assertEquals(2, events.stream().filter(e -> e instanceof TurnEvent.Iter).count());
+        // 被拒结果 isError 且含原因
+        Message toolTurn = history.stream().filter(m -> m.role() == Role.TOOL).findFirst().orElseThrow();
+        assertTrue(toolTurn.toolResults().get(0).isError());
+        assertTrue(toolTurn.toolResults().get(0).content().contains("项目目录之外"));
+    }
+
+    @Test
+    void askApprovalAllowOnceExecutesAndDenyOnceFeedsBack() {
+        // default 模式下 WriteFile 触发 Ask → 回传 ALLOW_ONCE 执行；再触发 → DENY_ONCE 回灌
+        FakeProvider provider = new FakeProvider(List.of(
+                List.of(new ChatEvent.ToolCallComplete(new ToolCall("c1", "WriteFile",
+                        "{\"path\":\"ok1.txt\"}"))),
+                List.of(new ChatEvent.ToolCallComplete(new ToolCall("c2", "WriteFile",
+                        "{\"path\":\"ok2.txt\"}"))),
+                List.of(new ChatEvent.TextDelta("完成"), new ChatEvent.Done(new Usage(1, 1)))));
+
+        ToolRegistry registry = new ToolRegistry();
+        registry.register(new FakeTool("WriteFile", false));
+        List<Message> history = history();
+
+        PermissionEngine engine = PermissionEngine.create(root);
+        List<TurnEvent> events = drain(new Agent(provider, registry, "test", engine,
+                new java.util.ArrayDeque<>(java.util.List.of(dinocode.permission.Outcome.ALLOW_ONCE,
+                        dinocode.permission.Outcome.DENY_ONCE)))
+                .run(history, 4096, Mode.DEFAULT, new CancelToken()));
+
+        // 两次 Approval 事件发出
+        assertEquals(2, events.stream().filter(e -> e instanceof TurnEvent.Approval).count());
+        // 历史：一次成功执行 + 一次被拒回灌
+        List<Message> toolTurns = history.stream().filter(m -> m.role() == Role.TOOL).toList();
+        assertEquals(2, toolTurns.size());
+        assertFalse(toolTurns.get(0).toolResults().get(0).isError());
+        assertTrue(toolTurns.get(1).toolResults().get(0).isError());
+        assertTrue(toolTurns.get(1).toolResults().get(0).content().contains("拒绝"));
+    }
+
+    @Test
+    void allowForeverPersistsLocalRule() throws Exception {
+        FakeProvider provider = new FakeProvider(List.of(
+                List.of(new ChatEvent.ToolCallComplete(new ToolCall("c1", "WriteFile",
+                        "{\"path\":\"gen.txt\"}"))),
+                List.of(new ChatEvent.TextDelta("完成"), new ChatEvent.Done(new Usage(1, 1)))));
+
+        ToolRegistry registry = new ToolRegistry();
+        registry.register(new FakeTool("WriteFile", false));
+        List<Message> history = history();
+
+        PermissionEngine engine = PermissionEngine.create(root);
+        drain(new Agent(provider, registry, "test", engine,
+                new java.util.ArrayDeque<>(java.util.List.of(dinocode.permission.Outcome.ALLOW_FOREVER)))
+                .run(history, 4096, Mode.DEFAULT, new CancelToken()));
+
+        // 本地层配置文件被写入精确 allow 规则
+        java.nio.file.Path local = root.resolve(".dino").resolve("settings.local.yaml");
+        assertTrue(java.nio.file.Files.exists(local));
+        String yaml = java.nio.file.Files.readString(local);
+        assertTrue(yaml.contains("Write(gen.txt)"));
+    }
+
+    @Test
+    void readOnlyBatchDenyDoesNotEmitApproval() {
+        // 只读被沙箱拦 → Deny 回灌；不产生 Approval 事件（N3/AC13）
+        FakeProvider provider = new FakeProvider(List.of(
+                List.of(
+                        new ChatEvent.ToolCallComplete(new ToolCall("c1", "ReadFile",
+                                "{\"path\":\"/etc/passwd\"}")),
+                        new ChatEvent.ToolCallComplete(new ToolCall("c2", "ReadFile",
+                                "{\"path\":\"inside.txt\"}"))),
+                List.of(new ChatEvent.TextDelta("完成"), new ChatEvent.Done(new Usage(1, 1)))));
+
+        ToolRegistry registry = new ToolRegistry();
+        registry.register(new FakeTool("ReadFile", true));
+        List<Message> history = history();
+
+        PermissionEngine engine = PermissionEngine.create(root);
+        List<TurnEvent> events = drain(new Agent(provider, registry, "test", engine)
+                .run(history, 4096, Mode.DEFAULT, new CancelToken()));
+
+        assertEquals(0, events.stream().filter(e -> e instanceof TurnEvent.Approval).count());
+        // 被拒与放行按调用序配对回灌，互不串位（AC11）
+        Message toolTurn = history.stream().filter(m -> m.role() == Role.TOOL).findFirst().orElseThrow();
+        assertEquals("c1", toolTurn.toolResults().get(0).toolCallId());
+        assertTrue(toolTurn.toolResults().get(0).isError());
+        assertEquals("c2", toolTurn.toolResults().get(1).toolCallId());
+        assertFalse(toolTurn.toolResults().get(1).isError());
+    }
+
+    @Test
+    void mixedBatchKeepsResultOrderAndPairing() {
+        // 串行批：被拒调用与放行调用按调用序、各自 ID 配对（AC11）
+        FakeProvider provider = new FakeProvider(List.of(
+                List.of(
+                        new ChatEvent.ToolCallComplete(new ToolCall("c1", "Bash", "{\"command\":\"rm -rf /\"}")),
+                        new ChatEvent.ToolCallComplete(new ToolCall("c2", "Bash", "{\"command\":\"echo ok\"}"))),
+                List.of(new ChatEvent.TextDelta("完成"), new ChatEvent.Done(new Usage(1, 1)))));
+
+        ToolRegistry registry = new ToolRegistry();
+        registry.register(new FakeTool("Bash", false));
+        List<Message> history = history();
+
+        PermissionEngine engine = PermissionEngine.create(root);
+        drain(new Agent(provider, registry, "test", engine)
+                .run(history, 4096, Mode.BYPASS, new CancelToken()));
+
+        Message toolTurn = history.stream().filter(m -> m.role() == Role.TOOL).findFirst().orElseThrow();
+        assertEquals(2, toolTurn.toolResults().size());
+        assertEquals("c1", toolTurn.toolResults().get(0).toolCallId());
+        assertTrue(toolTurn.toolResults().get(0).isError(), "黑名单命中的应被拒");
+        assertEquals("c2", toolTurn.toolResults().get(1).toolCallId());
+        assertFalse(toolTurn.toolResults().get(1).isError(), "正常命令应执行");
     }
 }

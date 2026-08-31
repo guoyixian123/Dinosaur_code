@@ -55,6 +55,19 @@ public final class Session {
         this.messages = messages;
     }
 
+    /**
+     * 整体替换消息列表（ch08 T21）：摘要后用新历史替换旧历史。
+     * 深拷贝（含 toolCalls / toolResults），不暴露入参引用。
+     */
+    public void replaceMessages(List<Message> msgs) {
+        List<Message> copy = new ArrayList<>();
+        for (Message m : (msgs == null ? List.<Message>of() : msgs)) {
+            copy.add(new Message(m.role(), m.content(),
+                    new ArrayList<>(m.toolCalls()), new ArrayList<>(m.toolResults())));
+        }
+        this.messages = copy;
+    }
+
     public void setSettings(SessionSettings settings) {
         this.settings = settings;
     }
