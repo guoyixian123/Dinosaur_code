@@ -171,7 +171,9 @@ public final class ContextCompactor {
             }
             out.add(new Message(m.role(), m.content(), m.toolCalls(), List.copyOf(resolved)));
         }
-        return changed ? out : msgs;
+        // 永远返回新列表：调用方（Agent.streamWithCompact）会 clear+addAll 回写原列表，
+        // 若返回入参引用会先 clear 再 addAll 同一空列表，把对话历史清空（ch08 遗留 bug）。
+        return out;
     }
 
     /** 落盘单条工具结果到 spillDir/&lt;toolUseId&gt;；幂等（已存在不重写，AC3）。 */

@@ -120,6 +120,20 @@ class CompactorTest {
     }
 
     @Test
+    void layer1ResultIsNeverTheInputListReference() {
+        // 回归守护：offloadAndSnip 无改动时也必须返回新列表。
+        // 若返回入参引用，Agent 的 clear+addAll 回写会把对话历史清空
+        //（表现为每轮请求只有 system、无 user 消息，输入 token 恒定）。
+        List<Message> msgs = List.of(Message.user("用户消息"));
+        List<Message> out = ContextCompactor.offloadAndSnip(
+                msgs, new ContentReplacementState(),
+                SessionContext.create(root));
+        assertTrue(out != msgs, "返回值不得与入参是同一引用");
+        assertEquals(1, out.size());
+        assertEquals("用户消息", out.get(0).content());
+    }
+
+    @Test
     void autoTriggersSummaryAtThreshold() throws Exception {
         FakeProvider p = summaryProvider();
         // anchor 拉高让估算越过 167000 阈值
