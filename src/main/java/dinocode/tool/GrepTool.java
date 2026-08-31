@@ -54,6 +54,11 @@ public final class GrepTool implements Tool {
     }
 
     @Override
+    public boolean readOnly() {
+        return true;
+    }
+
+    @Override
     public Result execute(Map<String, Object> args) {
         GrepArgs a;
         try {

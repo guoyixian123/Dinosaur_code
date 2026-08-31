@@ -1,15 +1,41 @@
 package dinocode.prompt;
 
+import java.util.ArrayList;
+import java.util.List;
+
 /**
- * 内置 system prompt（ch03 F3）：说明 Agent 角色与工具使用约定。
+ * 系统提示装配（ch05 F1）：把模块按优先级升序拼接为稳定系统提示。
+ * 只依赖常量内容 → 跨轮逐字节一致，可安全进缓存前缀（N1）。
+ * 环境信息不在此处——见 {@link Environment}（变化内容不进稳定块）。
  */
 public final class Prompt {
 
-    public static final String SYSTEM_PROMPT = """
-            你是 Dino Code，一个运行在终端的 AI 编程助手。
-            你可以使用工具来读取、写入、修改文件，执行 shell 命令，按模式查找文件，搜索代码内容。
-            当需要文件内容或文件系统信息、或需要执行某个操作时，请调用相应的工具；
-            拿到工具结果后再据此给出简洁的答复。""";
+    /**
+     * 按优先级升序装配模块：空 content 跳过（可选空槽）、其余以空行连接。
+     * 挂载新模块 = 放进列表，不改本方法（F1/N8）。
+     */
+    public static String assembleSystem(List<Module> modules) {
+        List<Module> sorted = new ArrayList<>(modules);
+        sorted.sort((a, b) -> Integer.compare(a.priority(), b.priority()));
+        StringBuilder sb = new StringBuilder();
+        for (Module m : sorted) {
+            if (m.content() == null || m.content().isEmpty()) {
+                continue;
+            }
+            if (!sb.isEmpty()) {
+                sb.append("\n\n");
+            }
+            sb.append(m.content());
+        }
+        return sb.toString();
+    }
+
+    /** 完整稳定系统提示 = 固定模块 + 可选空槽（空槽自动跳过）。 */
+    public static String buildSystemPrompt() {
+        List<Module> all = new ArrayList<>(Modules.fixedModules());
+        all.addAll(Modules.optionalModules());
+        return assembleSystem(all);
+    }
 
     private Prompt() {
     }

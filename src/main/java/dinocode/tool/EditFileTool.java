@@ -30,7 +30,8 @@ public final class EditFileTool implements Tool {
 
     @Override
     public String description() {
-        return "对文件中的 old_string 做唯一匹配替换为 new_string。old_string 必须唯一（匹配 0 处或 >1 处会报错）。";
+        return "对文件中的 old_string 做唯一匹配替换为 new_string。old_string 必须唯一（匹配 0 处或 >1 处会报错）。"
+                + "编辑前请先用 ReadFile 读取目标文件，确认 old_string 唯一。";
     }
 
     @Override
@@ -44,6 +45,11 @@ public final class EditFileTool implements Tool {
         schema.put("properties", props);
         schema.put("required", List.of("path", "old_string", "new_string"));
         return schema;
+    }
+
+    @Override
+    public boolean readOnly() {
+        return false;
     }
 
     @Override

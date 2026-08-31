@@ -36,7 +36,9 @@ final class CommandHandler {
               /exit     保存并退出
               /new      开启新会话
               /help     显示本帮助
-              /tokens   查看或设置最大输出 (/tokens low|medium|high|max|<数值>)""";
+              /tokens   查看或设置最大输出 (/tokens low|medium|high|max|<数值>)
+              /plan     进入计划模式（只读工具，先出计划）
+              /do       按计划开始执行（切回全工具）""";
 
     private CommandHandler() {
     }

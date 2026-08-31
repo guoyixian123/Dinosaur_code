@@ -40,6 +40,9 @@ class OpenAiProviderTest {
         ChatEvent.Done done = assertInstanceOf(ChatEvent.Done.class, events.get(2));
         assertEquals(Integer.valueOf(7), done.usage().inputTokens());
         assertEquals(Integer.valueOf(2), done.usage().outputTokens());
+        // 缓存命中解析（ch05 F4）：cached_tokens → cacheRead，cacheWrite 恒无
+        assertEquals(Integer.valueOf(4), done.usage().cacheRead());
+        assertEquals(null, done.usage().cacheWrite());
     }
 
     @Test

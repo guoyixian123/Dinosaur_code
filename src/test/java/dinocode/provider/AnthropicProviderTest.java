@@ -45,6 +45,9 @@ class AnthropicProviderTest {
         ChatEvent.Done done = assertInstanceOf(ChatEvent.Done.class, events.get(4));
         assertEquals(Integer.valueOf(10), done.usage().inputTokens());
         assertEquals(Integer.valueOf(25), done.usage().outputTokens());
+        // 缓存字段解析（ch05 F4）：message_start 带回的缓存写入被透传
+        assertEquals(Integer.valueOf(100), done.usage().cacheWrite());
+        assertEquals(Integer.valueOf(0), done.usage().cacheRead());
     }
 
     @Test

@@ -49,6 +49,11 @@ public final class GlobTool implements Tool {
     }
 
     @Override
+    public boolean readOnly() {
+        return true;
+    }
+
+    @Override
     public Result execute(Map<String, Object> args) {
         GlobArgs a;
         try {

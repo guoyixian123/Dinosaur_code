@@ -43,6 +43,11 @@ public final class WriteFileTool implements Tool {
     }
 
     @Override
+    public boolean readOnly() {
+        return false;
+    }
+
+    @Override
     public Result execute(Map<String, Object> args) {
         WriteFileArgs a;
         try {

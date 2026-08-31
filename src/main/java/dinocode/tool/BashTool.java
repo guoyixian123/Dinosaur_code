@@ -39,7 +39,8 @@ public final class BashTool implements Tool {
 
     @Override
     public String description() {
-        return "在当前工作目录执行 shell 命令，返回标准输出与退出码。命令受超时约束。";
+        return "在当前工作目录执行 shell 命令，返回标准输出与退出码。命令受超时约束。"
+                + "读文件、找文件、搜内容请优先用 ReadFile/Glob/Grep，不要用 Bash 拼凑。";
     }
 
     @Override
@@ -51,6 +52,11 @@ public final class BashTool implements Tool {
         schema.put("properties", props);
         schema.put("required", List.of("command"));
         return schema;
+    }
+
+    @Override
+    public boolean readOnly() {
+        return false;
     }
 
     @Override

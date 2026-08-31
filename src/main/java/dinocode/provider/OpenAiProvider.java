@@ -11,7 +11,6 @@ import dinocode.core.ToolCall;
 import dinocode.core.ToolDefinition;
 import dinocode.core.ToolResult;
 import dinocode.core.Usage;
-import dinocode.prompt.Prompt;
 
 import java.io.InputStream;
 import java.net.http.HttpRequest;
@@ -35,7 +34,7 @@ public final class OpenAiProvider extends AbstractHttpProvider {
     protected HttpRequest buildRequest(ChatRequest request) throws JsonProcessingException {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("model", model());
-        body.put("messages", toMessages(request.history()));
+        body.put("messages", toMessages(request));
         body.put("stream", true);
         body.put("max_tokens", request.maxTokens());
         // 让最后一个数据块带回用量，供终端显示（checklist §B）
@@ -57,12 +56,27 @@ public final class OpenAiProvider extends AbstractHttpProvider {
 
     // ---------- 请求体序列化 ----------
 
-    private static ArrayNode toMessages(List<Message> history) {
+    /**
+     * 消息装配（ch05 F3/F6/F8）：单条 system 消息 = 稳定块在前 + 环境段拼尾
+     * （兼容端点对多条 system 支持不一；stable 居前缀 → 端点前缀缓存自动命中稳定部分）。
+     * reminder 非空时追加一条尾部 user 消息（OpenAI 容忍 tool 后接 user）。
+     */
+    private static ArrayNode toMessages(ChatRequest request) {
         ArrayNode messages = JSON.createArrayNode();
         ObjectNode system = messages.addObject();
         system.put("role", "system");
-        system.put("content", Prompt.SYSTEM_PROMPT);
-        for (Message m : history) {
+        String content = request.systemStable();
+        if (!request.systemEnvironment().isEmpty()) {
+            content = content.isEmpty()
+                    ? request.systemEnvironment()
+                    : content + "\n\n" + request.systemEnvironment();
+        }
+        if (!content.isEmpty()) {
+            system.put("content", content);
+        } else {
+            messages.remove(messages.size() - 1); // 无系统内容时不发空 system 消息
+        }
+        for (Message m : request.history()) {
             switch (m.role()) {
                 case Role.USER -> {
                     ObjectNode node = messages.addObject();
@@ -79,6 +93,11 @@ public final class OpenAiProvider extends AbstractHttpProvider {
                     }
                 }
             }
+        }
+        if (!request.reminder().isEmpty()) {
+            ObjectNode node = messages.addObject();
+            node.put("role", "user");
+            node.put("content", request.reminder());
         }
         return messages;
     }
@@ -155,9 +174,13 @@ public final class OpenAiProvider extends AbstractHttpProvider {
             }
             JsonNode usageNode = root.path("usage");
             if (usageNode.isObject() && usageNode.has("prompt_tokens")) {
+                // 缓存命中解析（ch05 F4/N6）：prompt_tokens_details.cached_tokens，缺字段为 null
+                JsonNode details = usageNode.path("prompt_tokens_details");
                 usage = new Usage(
                         usageNode.path("prompt_tokens").asInt(),
-                        usageNode.path("completion_tokens").asInt());
+                        usageNode.path("completion_tokens").asInt(),
+                        null,
+                        details.path("cached_tokens").isInt() ? details.path("cached_tokens").asInt() : null);
             }
             JsonNode delta = root.path("choices").path(0).path("delta");
             // 工具调用分片按 index 累积

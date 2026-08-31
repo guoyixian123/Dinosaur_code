@@ -24,6 +24,8 @@ import java.util.concurrent.atomic.AtomicInteger;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
 /**
  * 离线端到端（AC8）：OpenAiProvider + Agent + 工具走通「请求#1 工具调用 → 执行 → 回灌 → 请求#2 最终答复」，
  * 不依赖真实 key。
@@ -48,6 +50,11 @@ class AgentHttpE2eTest {
         @Override
         public Map<String, Object> schema() {
             return Map.of("type", "object");
+        }
+
+        @Override
+        public boolean readOnly() {
+            return true;
         }
 
         @Override
@@ -104,7 +111,7 @@ class AgentHttpE2eTest {
 
         List<TurnEvent> events = new ArrayList<>();
         TurnEvent event;
-        try (TurnStream stream = new Agent(provider, registry).run(history, 4096)) {
+        try (TurnStream stream = new Agent(provider, registry, "test").run(history, 4096, Mode.NORMAL, new CancelToken())) {
             while ((event = stream.next()) != null) {
                 events.add(event);
             }

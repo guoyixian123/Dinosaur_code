@@ -67,6 +67,14 @@ final class Renderer {
         out.flush();
     }
 
+    /** 迭代进度提示（ch04 F9）：仅在多轮时可见。 */
+    void iter(int iter) {
+        if (iter > 1) {
+            out.println(Ansi.DIM + "── 第 " + iter + " 轮 ──" + Ansi.RESET);
+            out.flush();
+        }
+    }
+
     /** 工具行：绿色 ● name(args)（AC11/F8）。 */
     void toolLine(String name, String argsPreview) {
         endThinking();

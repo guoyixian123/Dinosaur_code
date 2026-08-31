@@ -41,6 +41,11 @@ public final class ReadFileTool implements Tool {
     }
 
     @Override
+    public boolean readOnly() {
+        return true;
+    }
+
+    @Override
     public Result execute(Map<String, Object> args) {
         ReadFileArgs a;
         try {

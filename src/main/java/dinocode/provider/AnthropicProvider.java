@@ -12,7 +12,6 @@ import dinocode.core.ToolCall;
 import dinocode.core.ToolDefinition;
 import dinocode.core.ToolResult;
 import dinocode.core.Usage;
-import dinocode.prompt.Prompt;
 
 import java.io.InputStream;
 import java.net.http.HttpRequest;
@@ -43,8 +42,8 @@ public final class AnthropicProvider extends AbstractHttpProvider {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("model", model());
         body.put("max_tokens", request.maxTokens());
-        body.put("system", Prompt.SYSTEM_PROMPT);
-        body.put("messages", toMessages(request.history()));
+        body.put("system", toSystem(request));
+        body.put("messages", toMessages(request.history(), request.reminder()));
         body.put("stream", true);
         if (!request.tools().isEmpty()) {
             body.put("tools", toTools(request.tools()));
@@ -68,7 +67,28 @@ public final class AnthropicProvider extends AbstractHttpProvider {
 
     // ---------- 请求体序列化 ----------
 
-    private static ArrayNode toMessages(List<Message> history) {
+    /**
+     * 系统内容两块（ch05 F3）：稳定块带 cache_control 断点（默认 5m TTL），
+     * 环境块不带——请求序 tools → system → messages，断点即缓存「全部工具 + 稳定块」前缀，
+     * 环境信息与历史在断点之后不缓存，环境变化不影响前缀命中。
+     */
+    private static ArrayNode toSystem(ChatRequest request) {
+        ArrayNode system = JSON.createArrayNode();
+        if (!request.systemStable().isEmpty()) {
+            ObjectNode stable = system.addObject();
+            stable.put("type", "text");
+            stable.put("text", request.systemStable());
+            stable.putObject("cache_control").put("type", "ephemeral");
+        }
+        if (!request.systemEnvironment().isEmpty()) {
+            ObjectNode env = system.addObject();
+            env.put("type", "text");
+            env.put("text", request.systemEnvironment());
+        }
+        return system;
+    }
+
+    private static ArrayNode toMessages(List<Message> history, String reminder) {
         ArrayNode messages = JSON.createArrayNode();
         for (Message m : history) {
             switch (m.role()) {
@@ -81,7 +101,31 @@ public final class AnthropicProvider extends AbstractHttpProvider {
                 case Role.TOOL -> appendToolResults(messages, m);
             }
         }
+        appendReminder(messages, reminder);
         return messages;
+    }
+
+    /**
+     * 补充消息织入（ch05 F6/N3）：追加到最后一条消息的 content（末条恒为 user 或
+     * tool_result → user，追加文本块仍是合法 user 消息）；极端情形（末尾为 assistant
+     * 或历史为空）则新起一条 user 消息。不产生连续 user 触发 400。
+     */
+    private static void appendReminder(ArrayNode messages, String reminder) {
+        if (reminder == null || reminder.isEmpty()) {
+            return;
+        }
+        if (!messages.isEmpty()) {
+            ObjectNode last = (ObjectNode) messages.get(messages.size() - 1);
+            if ("user".equals(last.path("role").asText())) {
+                ObjectNode text = last.withArray("content").addObject();
+                text.put("type", "text");
+                text.put("text", reminder);
+                return;
+            }
+        }
+        ObjectNode node = messages.addObject();
+        node.put("role", "user");
+        node.put("content", reminder);
     }
 
     private static void appendAssistant(ArrayNode messages, Message m) {
@@ -140,6 +184,11 @@ public final class AnthropicProvider extends AbstractHttpProvider {
         }
     }
 
+    /** 缓存字段缺失按 null 处理（N6），不因缺字段中断本轮。 */
+    private static Integer pathOrNull(JsonNode node, String field) {
+        return node.path(field).isInt() ? node.path(field).asInt() : null;
+    }
+
     private static boolean hasToolTurns(List<Message> history) {
         for (Message m : history) {
             if (m.role() == Role.TOOL || !m.toolCalls().isEmpty()) {
@@ -179,10 +228,12 @@ public final class AnthropicProvider extends AbstractHttpProvider {
             String type = root.path("type").asText("");
             return switch (type) {
                 case "message_start" -> {
-                    JsonNode inputTokens = root.path("message").path("usage").path("input_tokens");
-                    if (inputTokens.isInt()) {
-                        usage = usage.merge(new Usage(inputTokens.asInt(), null));
-                    }
+                    JsonNode u = root.path("message").path("usage");
+                    usage = usage.merge(new Usage(
+                            u.path("input_tokens").isInt() ? u.path("input_tokens").asInt() : null,
+                            null,
+                            pathOrNull(u, "cache_creation_input_tokens"),
+                            pathOrNull(u, "cache_read_input_tokens")));
                     yield null;
                 }
                 case "content_block_start" -> {
@@ -217,10 +268,12 @@ public final class AnthropicProvider extends AbstractHttpProvider {
                     yield null;
                 }
                 case "message_delta" -> {
-                    JsonNode outputTokens = root.path("usage").path("output_tokens");
-                    if (outputTokens.isInt()) {
-                        usage = usage.merge(new Usage(null, outputTokens.asInt()));
-                    }
+                    JsonNode u = root.path("usage");
+                    usage = usage.merge(new Usage(
+                            null,
+                            u.path("output_tokens").isInt() ? u.path("output_tokens").asInt() : null,
+                            pathOrNull(u, "cache_creation_input_tokens"),
+                            pathOrNull(u, "cache_read_input_tokens")));
                     yield null;
                 }
                 case "message_stop" -> {

@@ -42,6 +42,24 @@ public final class ToolRegistry {
         return defs;
     }
 
+    /** 仅导出只读工具定义（ch04 Plan Mode，F10）。 */
+    public List<ToolDefinition> readOnlyDefinitions() {
+        List<ToolDefinition> defs = new ArrayList<>();
+        for (String name : order) {
+            Tool tool = tools.get(name);
+            if (tool.readOnly()) {
+                defs.add(new ToolDefinition(tool.name(), tool.description(), tool.schema()));
+            }
+        }
+        return defs;
+    }
+
+    /** 分批判定；未知工具返回 false（按有副作用串行处理）。 */
+    public boolean isReadOnly(String name) {
+        Tool tool = tools.get(name);
+        return tool != null && tool.readOnly();
+    }
+
     /** 按名执行工具；未知工具兜底为 error；args 为 null 时按空参数处理。 */
     public Result execute(String name, Map<String, Object> args) {
         Tool tool = tools.get(name);

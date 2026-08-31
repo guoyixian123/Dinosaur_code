@@ -17,6 +17,9 @@ public interface Tool {
     /** 手写 JSON Schema（type/properties/required），LinkedHashMap 保序。 */
     Map<String, Object> schema();
 
+    /** true=只读工具（可并发执行，Plan Mode 放行）；false=有副作用（串行执行）。 */
+    boolean readOnly();
+
     /** 执行工具；args 为解析好的参数对象。 */
     Result execute(Map<String, Object> args);
 }
