@@ -79,6 +79,11 @@ public final class Tui {
     private String memoryText = "";
     private java.nio.file.Path workspace;
 
+    // ch11：技能目录
+    private final dinocode.skill.SkillCatalog skillCatalog = new dinocode.skill.SkillCatalog();
+    /** 本会话已激活的技能名（系统提示 Active Skills 段与工具过滤依据）。 */
+    private final java.util.Set<String> activeSkills = new java.util.LinkedHashSet<>();
+
     public Tui(AppConfig config, ChatProvider provider, ToolRegistry registry, PermissionEngine engine,
                CompactContext compact, SessionStore store, Session session, boolean restored) {
         this.config = config;
@@ -127,6 +132,26 @@ public final class Tui {
             bindShiftTab(reader);
             renderer = new Renderer(terminal.writer());
 
+            // ch11 T7：扫描两层技能目录并注册为 PROMPT 命令（description 以 [skill] 结尾，N7）
+            skillCatalog.loadCatalog(workspace != null ? workspace : java.nio.file.Path.of("").toAbsolutePath());
+            wireSkillsToAgent();
+            cmdRegistry.register(dinocode.command.Command.of("skills", "[skill] 列出已加载技能",
+                    dinocode.command.Kind.LOCAL,
+                    (cancelled, ui) -> {
+                        var skills = skillCatalog.list();
+                        if (skills.isEmpty()) {
+                            ui.println("当前没有已加载的技能。");
+                        } else {
+                            StringBuilder sb = new StringBuilder("已加载技能:");
+                            for (var s : skills) {
+                                sb.append("\n  /").append(s.meta().name()).append("  ")
+                                        .append(s.meta().description() == null ? "" : s.meta().description())
+                                        .append(" [").append(s.meta().mode()).append("]");
+                            }
+                            ui.println(sb.toString());
+                        }
+                    }));
+
             Banner.print(terminal.writer(), config,
                     restored ? "已恢复上次会话 " + session.getId() : "新会话");
             renderer.notice("提示: Shift+Tab 切换权限模式，Tab 补全斜杠命令，/help 查看全部命令");
@@ -139,6 +164,26 @@ public final class Tui {
         } finally {
             closeTerminal();
         }
+    }
+
+    /** ch11 T7：把 catalog 内每个技能注册为 PROMPT 命令（跳过已有命令，F11/N7）。 */
+    private void wireSkillsToAgent() {
+        for (var skill : skillCatalog.list()) {
+            registerSkillCommand(skill.meta().name());
+        }
+    }
+
+    private void registerSkillCommand(String name) {
+        if (cmdRegistry.lookup(name).isPresent()) {
+            return; // 跳过已存在命令（F11）
+        }
+        var skill = skillCatalog.get(name);
+        String desc = (skill.meta().description() == null ? name : skill.meta().description())
+                + " [skill]"; // N7：description 以 [skill] 结尾作 UI 分支 marker
+        cmdRegistry.register(dinocode.command.Command.of(name, desc,
+                dinocode.command.Kind.PROMPT, (cancelled, ui) -> {
+                    // 占位 handler：真实执行走 dispatchSlash 的 [skill] 分支（executeSkillCommand）
+                }));
     }
 
     private void loop() {
@@ -210,7 +255,7 @@ public final class Tui {
 
     private final dinocode.command.CommandRegistry cmdRegistry = new dinocode.command.CommandRegistry();
 
-    /** 斜杠分发（ch10 F3~F7）："/" 开头走注册中心；返回 false 表示应退出。 */
+    /** 斜杠分发（ch10 F3~F7 + ch11 F11/F12）："/" 开头走注册中心；返回 false 表示应退出。 */
     private boolean dispatchSlash(String input) {
         var parsed = dinocode.command.Dispatch.parse(input);
         if (!parsed.isSlash()) {
@@ -228,6 +273,11 @@ public final class Tui {
             renderer.failure("请等待当前任务完成");
             return true;
         }
+        // ch11 F11/F12：[skill] 后缀 → 技能激活分支
+        if (cmd.kind() == dinocode.command.Kind.PROMPT && cmd.description().endsWith("[skill]")) {
+            executeSkillCommand(parsed.name(), input);
+            return true;
+        }
         try {
             cmd.handler().handle(new java.util.concurrent.atomic.AtomicBoolean(false), asUi());
         } catch (ExitRequested exit) {
@@ -236,6 +286,33 @@ public final class Tui {
             renderer.failure("命令执行失败: " + (e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage()));
         }
         return true;
+    }
+
+    /**
+     * ch11 F11/F12/T8：技能命令执行——promptBody + args 作为 user message 进入对话
+     * （与真实用户消息同持久化路径），UI 提示 Successfully loaded skill。
+     */
+    private void executeSkillCommand(String name, String rawInput) {
+        var full = skillCatalog.getFull(name);
+        if (full == null) {
+            renderer.failure("技能不存在: " + name);
+            return;
+        }
+        // args = 命令名之后的文本（Dispatch 不解析尾巴，这里手动取）
+        String body = rawInput.strip();
+        String args = "";
+        if (body.startsWith("/" + name)) {
+            args = body.substring(("/" + name).length()).strip();
+        }
+        String prompt = dinocode.skill.SkillExecutor.substituteArguments(full.promptBody(), args);
+        activeSkills.add(name);
+        renderer.notice("skill(" + name + ") Successfully loaded skill"); // F12
+        turn(prompt, true); // 与真实用户消息同路径（N3）
+    }
+
+    /** 已激活技能的系统提示段（F6 buildActiveContext）。 */
+    private String skillContext() {
+        return activeSkills.isEmpty() ? "" : "\n\n" + skillCatalog.buildActiveContext(activeSkills);
     }
 
     /** Tui 的 Ui 抽象实现（F33）：handler 通过此视图操作 TUI。 */
@@ -539,7 +616,7 @@ public final class Tui {
         turnCancel = cancel;
         spinner.start();
         try (TurnStream stream = new Agent(provider, registry, "0.1.0", engine, compact, memMgr,
-                instructionText, memoryText)
+                instructionText + skillContext(), memoryText)
                 .run(session.getMessages(), currentMaxTokens(), mode, cancel)) {
             TurnEvent event;
             while ((event = stream.next()) != null) {
