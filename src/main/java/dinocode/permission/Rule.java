@@ -5,14 +5,16 @@ import java.util.List;
 import java.util.Optional;
 
 /**
- * 权限规则（ch06 F3）：「工具名(模式)」声明 allow/deny。
- * 工具名用友好名（Bash/Read/Write/Edit/Glob/Grep）；模式段支持精确与 glob；
- * 模式为空串表示匹配该工具全部调用。
+ * 权限规则（ch06 F3 + ch12 F1~F4）：「工具名(模式)」声明 allow/deny。
+ * 工具名用友好名（Bash/Read/Write/Edit/Glob/Grep）；模式段经 Matcher 编译——
+ * ch12 扩展为四种类型（=exact / ~regex / !not / 缺省 glob），空模式表示匹配该工具全部调用。
  */
 record Rule(String tool, String pattern, boolean allow) {
 
     /**
-     * 解析 "Bash(git *)" / "Read" 形式；非法（空、括号不配对、友好名空）返回 empty。
+     * 解析 "Bash(git *)" / "Read" / "Bash(=git status)" / "Bash(~^npm)" / "Bash(!~^rm)" 形式。
+     * 非法（空、括号不配对、友好名空、模式编译失败）一律返回 empty——
+     * 调用方 {@link Settings#toRuleSet()} 负责 stderr 报告（F4 有声降级）。
      *
      * @param allow 规则落点（allow 列表传 true，deny 列表传 false）
      */
@@ -39,7 +41,31 @@ record Rule(String tool, String pattern, boolean allow) {
         if (tool.isEmpty()) {
             return Optional.empty();
         }
+        // ch12：模式段过 Matcher 编译校验（失败返回 empty，F4 由调用方报告）
+        try {
+            Matchers.compile(pattern, tool.equals("Bash"));
+        } catch (Matchers.MatcherCompileException e) {
+            return Optional.empty();
+        }
         return Optional.of(new Rule(tool, pattern, allow));
+    }
+
+    /** 编译校验并返回失败原因；合法返回 null（F4 有声降级用）。 */
+    static String validate(String s) {
+        if (s == null || s.isBlank()) {
+            return null;
+        }
+        int open = s.indexOf('(');
+        if (open < 0 || !s.endsWith(")")) {
+            return null;
+        }
+        try {
+            Matchers.compile(s.substring(open + 1, s.length() - 1).strip(),
+                    s.substring(0, open).strip().equals("Bash"));
+            return null;
+        } catch (Matchers.MatcherCompileException e) {
+            return e.getMessage();
+        }
     }
 
     /**
@@ -56,6 +82,14 @@ record Rule(String tool, String pattern, boolean allow) {
         }
         // 命令串：** 折叠为 * 后走单星 glob
         return matchGlob(pattern.replace("**", "*"), t);
+    }
+
+    /** 路径 glob（ch12 Matcher.Glob 用）：* 段内、** 跨段。 */
+    static boolean matchPathPattern(String pattern, String target) {
+        if (pattern == null || pattern.isEmpty()) {
+            return true;
+        }
+        return matchPathSegments(splitSegments(pattern), splitSegments(target == null ? "" : target));
     }
 
     /** 路径按 / 分段，* 段内、** 跨段。 */

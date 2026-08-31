@@ -70,6 +70,15 @@ public final class Agent {
     private final String memoryText;
     /** ch09：run 轮次计数（记忆更新触发用）。 */
     private final java.util.concurrent.atomic.AtomicLong turnCount = new java.util.concurrent.atomic.AtomicLong();
+    /** ch12：Hook 引擎（可空 = 未配置 hooks）。 */
+    private final dinocode.hook.HookEngine hookEngine;
+    /** ch12 F20/F33：hook prompt 注入队列（本轮有效，streamOnce 前取出清空）。 */
+    private final java.util.List<String> pendingReminders = new ArrayList<>();
+    private final java.util.concurrent.locks.ReentrantLock reminderLock = new java.util.concurrent.locks.ReentrantLock();
+    /** ch12 F31：本轮 run 走完的迭代数（Stop payload）。 */
+    private volatile int lastIterCount;
+    /** ch12：当前权限模式名（payload 通用字段；run 时更新）。 */
+    private volatile String currentModeName = "default";
     /** 测试用：预置的人在回路决策队列；非 null 时 requestApproval 从此取决策（null=取消）。 */
     private final java.util.Deque<Outcome> scriptedOutcomes;
 
@@ -80,19 +89,28 @@ public final class Agent {
     /** 测试用：预置人在回路决策（依序消费；耗尽后阻塞等待真实回传）。 */
     public Agent(ChatProvider provider, ToolRegistry registry, String version, PermissionEngine engine,
                  java.util.Deque<Outcome> scriptedOutcomes) {
-        this(provider, registry, version, engine, null, null, "", "", scriptedOutcomes);
+        this(provider, registry, version, engine, null, null, "", "", null, scriptedOutcomes);
     }
 
-    /** 完整构造：ch08 上下文管理 + ch09 记忆。 */
+    /** 完整构造：ch08 上下文管理 + ch09 记忆 + ch10/12 引擎。 */
     public Agent(ChatProvider provider, ToolRegistry registry, String version, PermissionEngine engine,
                  CompactContext compact, dinocode.memory.Memory.Manager memMgr,
                  String instructionText, String memoryText) {
-        this(provider, registry, version, engine, compact, memMgr, instructionText, memoryText, null);
+        this(provider, registry, version, engine, compact, memMgr, instructionText, memoryText, null, null);
+    }
+
+    /** ch12：带 Hook 引擎的完整构造（Main 主路径）。 */
+    public Agent(ChatProvider provider, ToolRegistry registry, String version, PermissionEngine engine,
+                 CompactContext compact, dinocode.memory.Memory.Manager memMgr,
+                 String instructionText, String memoryText, dinocode.hook.HookEngine hookEngine) {
+        this(provider, registry, version, engine, compact, memMgr, instructionText, memoryText, hookEngine, null);
     }
 
     private Agent(ChatProvider provider, ToolRegistry registry, String version, PermissionEngine engine,
                   CompactContext compact, dinocode.memory.Memory.Manager memMgr,
-                  String instructionText, String memoryText, java.util.Deque<Outcome> scriptedOutcomes) {
+                  String instructionText, String memoryText, dinocode.hook.HookEngine hookEngine,
+                  java.util.Deque<Outcome> scriptedOutcomes) {
+        this.hookEngine = hookEngine;
         this.provider = provider;
         this.registry = registry;
         this.version = version == null ? "" : version;
@@ -120,6 +138,7 @@ public final class Agent {
      * @param cancel per-turn 取消句柄（ch04 F7）
      */
     public TurnStream run(List<Message> history, int maxTokens, Mode mode, CancelToken cancel) {
+        this.currentModeName = mode == null ? "default" : mode.displayName(); // ch12 payload 通用字段
         List<ToolDefinition> defs = mode == Mode.PLAN
                 ? registry.readOnlyDefinitions()
                 : registry.definitions();
@@ -203,6 +222,11 @@ public final class Agent {
                 boolean full = iter == 1 || (iter - 1) % PLAN_REMINDER_INTERVAL == 0;
                 reminder = Reminder.plan(full);
             }
+            // ch12 F33：hook 注入的 prompt 拼到 reminder 末尾（本轮有效，取出即清空）
+            String hookReminders = String.join("\n\n", takePendingReminders());
+            if (!hookReminders.isEmpty()) {
+                reminder = reminder.isEmpty() ? hookReminders : reminder + "\n\n" + hookReminders;
+            }
 
             // ch08：每轮请求前上下文管理（Layer1 预防 + 阈值判断 + 自动 Layer2）
             boolean emergencyRetried = false;
@@ -237,6 +261,8 @@ public final class Agent {
             if (out.calls().isEmpty()) {
                 history.add(Message.assistant(ensureFinal(out.text())));
                 triggerMemoryUpdate(history); // ch09 F35：本轮结束，条件满足时异步提取笔记
+                // ch12 F9：Stop 事件（自然停止；取消/出错路径不触发）
+                dispatchHook(dinocode.hook.Event.STOP, Map.of("iter", iter));
                 return new TurnEvent.Done(out.usage);
             }
 
@@ -287,6 +313,8 @@ public final class Agent {
                 if (willSummarize) {
                     queue.put(new TurnEvent.Notice("正在压缩上下文..."));
                 }
+                // ch12 F9：PreCompact（自动路径；紧急/手动路径在 manage EMERGENCY/MANUAL 分支）
+                dispatchHook(dinocode.hook.Event.PRE_COMPACT, Map.of("trigger", "auto"));
                 ContextCompactor.Result r = ContextCompactor.manage(new ContextCompactor.Input(
                         history, provider, compact.contextWindow, defs,
                         compact.replacement(), compact.recovery(), compact.autoTracking(), compact.session(),
@@ -295,6 +323,10 @@ public final class Agent {
                     history.clear();
                     history.addAll(r.newMsgs()); // Layer1 替换体 / Layer2 摘要历史写回（in-place，run 持有同一列表）
                 }
+                dispatchHook(dinocode.hook.Event.POST_COMPACT, Map.of(
+                        "trigger", "auto",
+                        "before_tokens", r.beforeTokens(),
+                        "after_tokens", r.afterTokens()));
                 if (willSummarize) {
                     queue.put(new TurnEvent.Notice(String.format("已压缩，token 从 %d 降至 %d",
                             r.beforeTokens(), r.afterTokens())));
@@ -406,6 +438,92 @@ public final class Agent {
         return start < history.size() ? new ArrayList<>(history.subList(start, history.size())) : List.of();
     }
 
+    // ==================== ch12 Hook 事件分派 ====================
+
+    /**
+     * TUI 驱动的事件分派（SessionStart/SessionEnd/SessionResume/UserPromptSubmit）。
+     * 返回 UserPromptSubmit 的拦截结果（其他事件忽略 blocked）。
+     */
+    public dinocode.hook.DispatchResult dispatchSessionHook(dinocode.hook.Event event, String sessionId,
+                                                            Map<String, Object> extra) {
+        if (hookEngine == null) {
+            return dinocode.hook.DispatchResult.empty();
+        }
+        Map<String, Object> data = new java.util.LinkedHashMap<>();
+        data.put("event", event.wireName());
+        data.put("session_id", sessionId);
+        data.put("cwd", System.getProperty("user.dir", ""));
+        data.put("mode", currentModeName);
+        if (extra != null) {
+            data.putAll(extra);
+        }
+        var result = hookEngine.dispatch(event, new dinocode.hook.HookRule.Payload(data));
+        appendReminders(result.injectedPrompts());
+        return result;
+    }
+
+    /** Notification 事件（权限 Ask / 流错误，F9）。 */
+    public void dispatchNotification(String kind, String detail) {
+        dispatchHook(dinocode.hook.Event.NOTIFICATION, Map.of("kind", kind, "detail", detail));
+    }
+
+    /** 取出并清空注入队列（F33：本轮有效）。 */
+    private List<String> takePendingReminders() {
+        reminderLock.lock();
+        try {
+            List<String> out = new ArrayList<>(pendingReminders);
+            pendingReminders.clear();
+            return out;
+        } finally {
+            reminderLock.unlock();
+        }
+    }
+
+    private void appendReminders(List<String> prompts) {
+        if (prompts == null || prompts.isEmpty()) {
+            return;
+        }
+        reminderLock.lock();
+        try {
+            pendingReminders.addAll(prompts);
+        } finally {
+            reminderLock.unlock();
+        }
+    }
+
+    /** 构造通用 payload 字段（F10）。 */
+    private dinocode.hook.HookRule.Payload basePayload(dinocode.hook.Event event,
+                                                       Map<String, Object> extra) {
+        Map<String, Object> data = new java.util.LinkedHashMap<>();
+        data.put("event", event.wireName());
+        data.put("session_id", compact != null && compact.session() != null
+                ? compact.session().sessionId() : "");
+        data.put("cwd", System.getProperty("user.dir", ""));
+        data.put("mode", currentModeName);
+        data.putAll(extra);
+        return new dinocode.hook.HookRule.Payload(data);
+    }
+
+    /** 事件分派入口；引擎为空返回 empty（未配置 hooks 时零开销）。 */
+    private dinocode.hook.DispatchResult dispatchHook(dinocode.hook.Event event, Map<String, Object> extra) {
+        if (hookEngine == null) {
+            return dinocode.hook.DispatchResult.empty();
+        }
+        var result = hookEngine.dispatch(event, basePayload(event, extra));
+        appendReminders(result.injectedPrompts());
+        return result;
+    }
+
+    /** PreToolUse hook 拦截判定（F32）：返回拦截原因，null = 放行。 */
+    private String hookBlockPreToolUse(ToolCall call) {
+        var result = dispatchHook(dinocode.hook.Event.PRE_TOOL_USE, Map.of(
+                "tool_name", call.name() == null ? "" : call.name(),
+                "tool_input", parseArgs(call.arguments())));
+        return result.blocked()
+                ? "[hook " + result.blockingHookName() + "] " + result.reason()
+                : null;
+    }
+
     /** 流失败内部信号：区分上下文超限（触发紧急压缩）与其他错误。 */
     private static final class StreamFailure extends RuntimeException {
         final String message;
@@ -494,6 +612,21 @@ public final class Agent {
             } else {
                 ToolCall call = calls.get(i);
 
+                // ch12 F32：PreToolUse hook 拦截（早于权限引擎）；拦截结果当 tool_result 回灌
+                String hookBlock = hookBlockPreToolUse(call);
+                if (hookBlock != null) {
+                    queue.put(new TurnEvent.ToolStart(call.name(), preview(call.arguments())));
+                    results[i] = new ToolResult(call.id(), hookBlock, true);
+                    queue.put(new TurnEvent.ToolEnd(call.name(), hookBlock, true));
+                    dispatchHook(dinocode.hook.Event.POST_TOOL_USE, Map.of(
+                            "tool_name", call.name() == null ? "" : call.name(),
+                            "tool_input", parseArgs(call.arguments()),
+                            "tool_result", hookBlock,
+                            "is_error", true));
+                    i++;
+                    continue;
+                }
+
                 // ch06：执行前过权限流水线（Deny 回灌 / Ask 人在回路）
                 PermissionEngine.CheckResult cr = engine.check(mode, call, false);
                 if (cr.decision() == dinocode.permission.Decision.DENY) {
@@ -533,6 +666,12 @@ public final class Agent {
                 queue.put(new TurnEvent.ToolStart(call.name(), preview(call.arguments())));
                 results[i] = executeTool(call, cancel.withTimeout(ToolRegistry.DEFAULT_TIMEOUT));
                 queue.put(new TurnEvent.ToolEnd(call.name(), results[i].content(), results[i].isError()));
+                // ch12 F9：PostToolUse（拿到 result 之后）
+                dispatchHook(dinocode.hook.Event.POST_TOOL_USE, Map.of(
+                        "tool_name", call.name() == null ? "" : call.name(),
+                        "tool_input", parseArgs(call.arguments()),
+                        "tool_result", results[i].content(),
+                        "is_error", results[i].isError()));
                 i++;
             }
         }

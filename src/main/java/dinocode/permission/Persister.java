@@ -44,7 +44,8 @@ final class Persister {
         if (text.isEmpty()) {
             return;
         }
-        Rule rule = Rule.parse(text.get(), true).orElseThrow();
+        Rule rule = Rule.parse(text.get(), true)
+                .orElseThrow(() -> new IOException("永久规则编译失败: " + text.get()));
         if (engine.loadLocal().toRuleSet().containsEquivalent(rule)) {
             engine.mergeLocalAllow(rule); // 已在文件中，仅补内存
             return;

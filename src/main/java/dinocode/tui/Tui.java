@@ -34,6 +34,7 @@ import java.io.PrintWriter;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 /**
  * 终端交互层：唯一接触终端的地方（见 spec 设计骨架）。
@@ -84,6 +85,11 @@ public final class Tui {
     /** 本会话已激活的技能名（系统提示 Active Skills 段与工具过滤依据）。 */
     private final java.util.Set<String> activeSkills = new java.util.LinkedHashSet<>();
 
+    // ch12：Hook 引擎（可空 = 未配置 hooks）
+    private dinocode.hook.HookEngine hookEngine;
+    /** ch12 F31：本会话的常驻 Agent（SessionStart/End/Resume 等 TUI 驱动事件的分派载体）。 */
+    private Agent sessionAgent;
+
     public Tui(AppConfig config, ChatProvider provider, ToolRegistry registry, PermissionEngine engine,
                CompactContext compact, SessionStore store, Session session, boolean restored) {
         this.config = config;
@@ -104,6 +110,50 @@ public final class Tui {
                 "查看或设置最大输出 (/tokens low|medium|high|max|<数值>)", dinocode.command.Kind.LOCAL,
                 (cancelled, ui) -> ui.println("用法: /tokens 已由启动参数与 /tokens 旧接口管理；当前会话最大输出 "
                         + currentMaxTokens())));
+        // ch12 F34/F35：/hooks 列出已加载 hook（按 event 分组）
+        cmdRegistry.register(dinocode.command.Command.of("hooks", "查看已加载的 Hook 列表",
+                dinocode.command.Kind.LOCAL, (cancelled, ui) -> printHooks(ui)));
+    }
+
+    /** ch12：注入 Hook 引擎（Main 在构造后链式调用）。 */
+    public Tui withHookEngine(dinocode.hook.HookEngine engine) {
+        this.hookEngine = engine;
+        return this;
+    }
+
+    /** ch12 F34/F35：/hooks 输出——按 event 分组、每条一行；无 hook 时提示。 */
+    private void printHooks(dinocode.command.Ui ui) {
+        if (hookEngine == null || hookEngine.isEmpty()) {
+            ui.println("No hooks loaded.");
+            return;
+        }
+        StringBuilder sb = new StringBuilder("已加载 Hook:");
+        dinocode.hook.Event prev = null;
+        for (var rule : hookEngine.rules()) {
+            if (prev != rule.event()) {
+                sb.append("\n[").append(rule.event().wireName()).append("]");
+                prev = rule.event();
+            }
+            sb.append("\n  ").append(rule.name()).append("  ").append(rule.event().wireName())
+                    .append("  ").append(actionType(rule.action()));
+            if (rule.onlyOnce()) {
+                sb.append(" [once]");
+            }
+            if (rule.async()) {
+                sb.append(" [async]");
+            }
+        }
+        sb.append("\nLoaded from: ").append(String.join(", ", hookEngine.sources()));
+        ui.println(sb.toString());
+    }
+
+    private static String actionType(dinocode.hook.Action action) {
+        return switch (action) {
+            case dinocode.hook.Action.Shell s -> "shell";
+            case dinocode.hook.Action.Prompt p -> "prompt";
+            case dinocode.hook.Action.Http h -> "http";
+            case dinocode.hook.Action.Subagent s -> "subagent";
+        };
     }
 
     /** ch09：注入存档/记忆组件（Main 在构造后链式调用）。 */
@@ -155,6 +205,10 @@ public final class Tui {
             Banner.print(terminal.writer(), config,
                     restored ? "已恢复上次会话 " + session.getId() : "新会话");
             renderer.notice("提示: Shift+Tab 切换权限模式，Tab 补全斜杠命令，/help 查看全部命令");
+
+            // ch12 F9：SessionStart 事件（env 装配完毕、首条 user 消息进入之前）
+            ensureSessionAgent();
+            sessionAgent.dispatchSessionHook(dinocode.hook.Event.SESSION_START, sessionId(), Map.of());
 
             loop();
             return 0;
@@ -315,6 +369,18 @@ public final class Tui {
         return activeSkills.isEmpty() ? "" : "\n\n" + skillCatalog.buildActiveContext(activeSkills);
     }
 
+    /** ch12：常驻轻量 Agent（承载 TUI 驱动事件的分派；无 hook 时构造开销极小）。 */
+    private void ensureSessionAgent() {
+        if (sessionAgent == null) {
+            sessionAgent = new Agent(provider, registry, "0.1.0", engine, compact, memMgr,
+                    instructionText, memoryText, hookEngine);
+        }
+    }
+
+    private String sessionId() {
+        return compact != null && compact.session() != null ? compact.session().sessionId() : "";
+    }
+
     /** Tui 的 Ui 抽象实现（F33）：handler 通过此视图操作 TUI。 */
     private UiView asUi() {
         return new UiView(this);
@@ -420,6 +486,9 @@ public final class Tui {
 
         @Override
         public void quit() {
+            // ch12 F9：SessionEnd（进程关闭前）
+            tui.ensureSessionAgent();
+            tui.sessionAgent.dispatchSessionHook(dinocode.hook.Event.SESSION_END, tui.sessionId(), Map.of());
             // N12：先取消进行中的回合再请求退出
             tui.renderer.notice("再见 🦖");
             tui.saveSessionQuietly();
@@ -453,6 +522,9 @@ public final class Tui {
 
     /** /clear（ch10 F17/AC8）：关旧存档 → 开新会话目录与存档 → 清空内存消息与用量。 */
     private void clearAndNewSession() {
+        // ch12 F9：SessionEnd（关旧会话前）
+        ensureSessionAgent();
+        sessionAgent.dispatchSessionHook(dinocode.hook.Event.SESSION_END, sessionId(), Map.of());
         try {
             if (archiveWriter != null) {
                 archiveWriter.close(); // 旧 JSONL 保留在磁盘（N9：/resume 仍可见）
@@ -479,6 +551,13 @@ public final class Tui {
         session = newSession;
         usageIn = 0; // F17：累计 token 归零
         usageOut = 0;
+        activeSkills.clear();
+        if (hookEngine != null) {
+            hookEngine.resetForNewSession(); // ch12 N5：only_once 集合清空
+        }
+        // ch12 F9：SessionStart（/clear 新建会话后）
+        ensureSessionAgent();
+        sessionAgent.dispatchSessionHook(dinocode.hook.Event.SESSION_START, sessionId(), Map.of());
     }
 
     private void turn(String input) {
@@ -564,9 +643,12 @@ public final class Tui {
         }
     }
 
-    /** 执行恢复流程（F21/F22/F23）。 */
+    /** 执行恢复流程（F21/F22/F23 + ch12 F9 SessionEnd/SessionResume）。 */
     private void resumeSession(dinocode.session.archive.SessionArchive.SessionInfo info) {
         try {
+            // ch12 F9：SessionEnd（切换离开旧会话前）
+            ensureSessionAgent();
+            sessionAgent.dispatchSessionHook(dinocode.hook.Event.SESSION_END, sessionId(), Map.of());
             // 1. 加载消息（从最后 compact 标记之后；坏行跳过；孤立工具调用截断）
             List<Message> msgs = dinocode.session.archive.SessionArchive.load(info.dir());
             // 2. 时间跨度提醒（F21-5/AC17）：最后消息距现在超 6 小时
@@ -584,6 +666,12 @@ public final class Tui {
             session = Session.fromMessages(info.id(), msgs,
                     newWriter::archiveAppend, newWriter::archiveReplace);
             compact.resetSession(dinocode.compact.state.SessionContext.open(workspace, info.id()));
+            activeSkills.clear();
+            if (hookEngine != null) {
+                hookEngine.resetForNewSession(); // ch12 N5
+            }
+            // ch12 F9：SessionResume（恢复完成后、首条 user 消息之前）
+            sessionAgent.dispatchSessionHook(dinocode.hook.Event.SESSION_RESUME, info.id(), Map.of());
             // 4. F24：原新会话的 JSONL 保留不删
             renderer.notice("已恢复会话 " + info.id() + "，共 " + msgs.size() + " 条消息");
         } catch (Exception e) {
@@ -603,6 +691,14 @@ public final class Tui {
 
     private void turn(String input, boolean intoHistory) {
         if (intoHistory) {
+            // ch12 F9/F32：UserPromptSubmit hook（写历史前，可拦截）
+            ensureSessionAgent();
+            var result = sessionAgent.dispatchSessionHook(
+                    dinocode.hook.Event.USER_PROMPT_SUBMIT, sessionId(), Map.of("prompt", input));
+            if (result.blocked()) {
+                renderer.failure("[hook " + result.blockingHookName() + "] " + result.reason());
+                return; // 阻止消息进入对话历史，焦点回输入框
+            }
             session.append(Message.user(input)); // ch09：经 append 触发 JSONL 存档回调
         }
         session.setLastActive(System.currentTimeMillis());
@@ -616,7 +712,7 @@ public final class Tui {
         turnCancel = cancel;
         spinner.start();
         try (TurnStream stream = new Agent(provider, registry, "0.1.0", engine, compact, memMgr,
-                instructionText + skillContext(), memoryText)
+                instructionText + skillContext(), memoryText, hookEngine)
                 .run(session.getMessages(), currentMaxTokens(), mode, cancel)) {
             TurnEvent event;
             while ((event = stream.next()) != null) {

@@ -23,22 +23,41 @@ final class RuleSet {
 
     /**
      * 先 deny 再 allow；命中返回裁决，未命中返回 empty（继续下一层）。
+     * ch12：模式段经 Matcher 编译匹配（exact/regex/not/glob）。
      *
      * @param friendly 友好工具名（Bash/Read/Write/Edit/Glob/Grep）
      * @param target   命令串或项目相对路径
      */
     Optional<Decision> match(String friendly, String target) {
+        return match(friendly, target, new ArrayList<>());
+    }
+
+    /** 带错误收集的匹配（ch12 F4：解析失败的规则跳过并报告）。 */
+    Optional<Decision> match(String friendly, String target, List<String> errors) {
         for (Rule r : deny) {
-            if (r.tool().equals(friendly) && Rule.matchPattern(r.pattern(), target)) {
+            if (r.tool().equals(friendly) && ruleMatches(r, target, errors)) {
                 return Optional.of(Decision.DENY);
             }
         }
         for (Rule r : allow) {
-            if (r.tool().equals(friendly) && Rule.matchPattern(r.pattern(), target)) {
+            if (r.tool().equals(friendly) && ruleMatches(r, target, errors)) {
                 return Optional.of(Decision.ALLOW);
             }
         }
         return Optional.empty();
+    }
+
+    /** 单条规则匹配；模式编译失败时报告错误并视为未命中（F4）。 */
+    private static boolean ruleMatches(Rule r, String target, List<String> errors) {
+        try {
+            Matcher m = Matchers.compile(r.pattern(), r.tool().equals("Bash"));
+            return m.match(target);
+        } catch (Matchers.MatcherCompileException e) {
+            if (errors != null) {
+                errors.add("rule \"" + r.tool() + "(" + r.pattern() + ")\" parse failed: " + e.getMessage());
+            }
+            return false;
+        }
     }
 
     /** 含某条等价规则（去重用）。 */

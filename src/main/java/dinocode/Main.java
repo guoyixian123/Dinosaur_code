@@ -64,6 +64,8 @@ public final class Main {
 
         // ch06：项目根沙箱 + 三层规则配置 + 启动默认模式
         PermissionEngine engine = PermissionEngine.create(root);
+        // ch12 F6/G2：Hook 引擎（两层 YAML 叠加加载；错误 stderr 后跳过，不阻断启动）
+        dinocode.hook.HookEngine hookEngine = dinocode.hook.HookLoader.load(root);
         // ch08：上下文管理状态（会话目录 + 账本 + 熔断 + 锚点），进程启动时生成一次（F34/F35）
         SessionContext sesCtx = SessionContext.create(root);
         CompactContext compact = new CompactContext(sesCtx, config.effectiveContextWindow());
@@ -86,6 +88,7 @@ public final class Main {
 
         int exitCode = new Tui(config, provider, registry, engine, compact, store, session, restored)
                 .withArchive(archiveWriter, memMgr, instructionText, memoryText, root)
+                .withHookEngine(hookEngine)
                 .run();
         mcpManager.close(); // 正常退出路径（shutdown hook 兜底异常退出）
         System.exit(exitCode);

@@ -64,16 +64,25 @@ record Settings(String defaultMode, List<String> allow, List<String> deny) {
         return out;
     }
 
-    /** 解析为规则集；非法条目跳过并降级（N5）。 */
+    /** 解析为规则集；非法条目跳过——ch12 F4：解析失败改为 stderr 报告（有声降级）。 */
     RuleSet toRuleSet() {
         List<Rule> allowRules = new ArrayList<>();
         List<Rule> denyRules = new ArrayList<>();
         for (String s : allow()) {
+            reportInvalid(s);
             Rule.parse(s, true).ifPresent(allowRules::add);
         }
         for (String s : deny()) {
+            reportInvalid(s);
             Rule.parse(s, false).ifPresent(denyRules::add);
         }
         return new RuleSet(allowRules, denyRules);
+    }
+
+    private static void reportInvalid(String s) {
+        String err = Rule.validate(s);
+        if (err != null) {
+            System.err.println("[permission] rule \"" + s + "\" parse failed: " + err);
+        }
     }
 }
