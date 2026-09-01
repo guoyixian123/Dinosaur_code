@@ -26,6 +26,9 @@ abstract class AbstractHttpProvider implements ChatProvider {
             .connectTimeout(Duration.ofSeconds(15))
             .build();
 
+    /** 单请求级超时（ch13：子 Agent 长流式响应可超 1 分钟，兜底防连接悬挂）。 */
+    static final Duration REQUEST_TIMEOUT = Duration.ofMinutes(5);
+
     protected final String baseUrl;
     protected final String apiKey;
     private final String model;
@@ -44,20 +47,30 @@ abstract class AbstractHttpProvider implements ChatProvider {
         } catch (JsonProcessingException e) {
             return SingleEventStream.of(new ChatEvent.Failure(ErrorKind.OTHER, "请求构造失败: " + brief(e)));
         }
-        try {
-            HttpResponse<InputStream> response = HTTP.send(httpRequest, HttpResponse.BodyHandlers.ofInputStream());
-            int status = response.statusCode();
-            if (status < 200 || status >= 300) {
-                String errorBody = new String(response.body().readAllBytes(), StandardCharsets.UTF_8);
-                return SingleEventStream.of(ApiErrors.fromHttp(status, errorBody));
+        // 连接被远端中途关闭（closed/reset）时自动重试一次——服务端瞬时断流，重试常能恢复
+        for (int attempt = 0; attempt < 2; attempt++) {
+            try {
+                HttpResponse<InputStream> response = HTTP.send(httpRequest, HttpResponse.BodyHandlers.ofInputStream());
+                int status = response.statusCode();
+                if (status < 200 || status >= 300) {
+                    String errorBody = new String(response.body().readAllBytes(), StandardCharsets.UTF_8);
+                    return SingleEventStream.of(ApiErrors.fromHttp(status, errorBody));
+                }
+                return streamFrom(response.body());
+            } catch (IOException e) {
+                String msg = String.valueOf(e.getMessage());
+                boolean transientClose = msg.contains("closed") || msg.contains("reset")
+                        || msg.contains("connection was not established");
+                if (attempt == 0 && transientClose) {
+                    continue; // 重试一次
+                }
+                return SingleEventStream.of(new ChatEvent.Failure(ErrorKind.NETWORK, "网络异常: " + brief(e)));
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return SingleEventStream.of(new ChatEvent.Failure(ErrorKind.NETWORK, "网络异常: 请求被中断"));
             }
-            return streamFrom(response.body());
-        } catch (IOException e) {
-            return SingleEventStream.of(new ChatEvent.Failure(ErrorKind.NETWORK, "网络异常: " + brief(e)));
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            return SingleEventStream.of(new ChatEvent.Failure(ErrorKind.NETWORK, "网络异常: 请求被中断"));
         }
+        return SingleEventStream.of(new ChatEvent.Failure(ErrorKind.NETWORK, "网络异常: 请求失败"));
     }
 
     /** 拼装协议请求（URL、头、请求体）。 */
