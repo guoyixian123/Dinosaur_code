@@ -70,6 +70,19 @@ public final class Main {
         SessionContext sesCtx = SessionContext.create(root);
         CompactContext compact = new CompactContext(sesCtx, config.effectiveContextWindow());
 
+        // ch13：子 Agent 系统——加载定义、构造 Agent 工具与任务管理器
+        dinocode.subagent.AgentLoader agentSpecs = dinocode.subagent.AgentLoader.loadAll(root);
+        // 子 Agent 执行委托：构造独立 Agent 实例阻塞消费事件流（N5）
+        dinocode.agent.SubAgentExecutor subExecutor = new dinocode.agent.SubAgentExecutor(
+                provider, config.maxTokens(), engine, instructionText, memoryText, hookEngine);
+        dinocode.subagent.SubAgentTaskManager.SubAgentRunner runner = subExecutor::run;
+        dinocode.subagent.SubAgentTaskManager taskManager = new dinocode.subagent.SubAgentTaskManager(runner);
+        dinocode.subagent.AgentTool.SubAgentRunnerDelegate delegate = subExecutor::run;
+        dinocode.subagent.AgentTool agentTool = new dinocode.subagent.AgentTool(registry, delegate)
+                .withTaskManager(taskManager)
+                .withAgentSpecs(agentSpecs);
+        registry.register(agentTool);
+
         // ch09 F13~F16：JSONL 会话存档写入器 + Session 回调挂接
         dinocode.session.archive.Writer archiveWriter;
         try {
@@ -89,6 +102,7 @@ public final class Main {
         int exitCode = new Tui(config, provider, registry, engine, compact, store, session, restored)
                 .withArchive(archiveWriter, memMgr, instructionText, memoryText, root)
                 .withHookEngine(hookEngine)
+                .withTaskManager(taskManager)
                 .run();
         mcpManager.close(); // 正常退出路径（shutdown hook 兜底异常退出）
         System.exit(exitCode);

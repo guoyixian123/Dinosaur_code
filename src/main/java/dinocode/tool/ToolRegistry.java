@@ -47,6 +47,15 @@ public final class ToolRegistry {
         return tools.size();
     }
 
+    /** 按注册顺序枚举全部工具实例（ch13 子 Agent 过滤复制用，N7）。 */
+    public List<Tool> toolsAll() {
+        List<Tool> out = new ArrayList<>();
+        for (String name : order) {
+            out.add(tools.get(name));
+        }
+        return out;
+    }
+
     /** 仅导出只读工具定义（ch04 Plan Mode，F10）。 */
     public List<ToolDefinition> readOnlyDefinitions() {
         List<ToolDefinition> defs = new ArrayList<>();

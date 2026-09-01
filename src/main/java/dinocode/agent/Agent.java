@@ -146,6 +146,28 @@ public final class Agent {
         // ch09：指令与记忆文本注入 custom-instructions / long-term-memory 槽位（F43）
         String stable = Prompt.buildSystemPrompt(instructionText, memoryText);
         String envText = Environment.gather(version, provider.model()).render();
+        return startLoop(history, maxTokens, defs, stable, envText, mode, cancel);
+    }
+
+    /**
+     * ch13 子 Agent 专用：系统提示整体覆盖（spec.systemPromptOverride）+ 预置初始对话
+     * （fork 场景）+ 指定工具集（已过 ToolFilter 六层过滤）。
+     */
+    public TurnStream runWithSystemOverride(List<Message> history, int maxTokens,
+                                            boolean readOnly, String envText, CancelToken cancel) {
+        this.currentModeName = Mode.DEFAULT.displayName();
+        List<ToolDefinition> defs = readOnly ? registry.readOnlyDefinitions() : registry.definitions();
+        // 子 Agent 系统提示覆盖：instructionText 字段在此场景承载 override 文本
+        String stable = instructionText == null || instructionText.isBlank()
+                ? Prompt.buildSystemPrompt("", "")
+                : instructionText;
+        String env = envText == null ? "" : envText;
+        return startLoop(history, maxTokens, defs, stable, env, Mode.DEFAULT, cancel);
+    }
+
+    /** run / runWithSystemOverride 共用的循环启动。 */
+    private TurnStream startLoop(List<Message> history, int maxTokens, List<ToolDefinition> defs,
+                                 String stable, String envText, Mode mode, CancelToken cancel) {
 
         BlockingQueue<TurnEvent> queue = new LinkedBlockingQueue<>();
         AtomicReference<EventStream> currentStream = new AtomicReference<>();

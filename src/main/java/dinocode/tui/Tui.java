@@ -89,6 +89,8 @@ public final class Tui {
     private dinocode.hook.HookEngine hookEngine;
     /** ch12 F31：本会话的常驻 Agent（SessionStart/End/Resume 等 TUI 驱动事件的分派载体）。 */
     private Agent sessionAgent;
+    // ch13：子 Agent 任务管理器（通知注入 + fork 父对话引用）
+    private dinocode.subagent.SubAgentTaskManager taskManager;
 
     public Tui(AppConfig config, ChatProvider provider, ToolRegistry registry, PermissionEngine engine,
                CompactContext compact, SessionStore store, Session session, boolean restored) {
@@ -119,6 +121,31 @@ public final class Tui {
     public Tui withHookEngine(dinocode.hook.HookEngine engine) {
         this.hookEngine = engine;
         return this;
+    }
+
+    /** ch13：注入子 Agent 任务管理器（fork 父对话 + 通知注入）。 */
+    public Tui withTaskManager(dinocode.subagent.SubAgentTaskManager taskManager) {
+        this.taskManager = taskManager;
+        return this;
+    }
+
+    /** ch13 F5：取出后台子 Agent 的完成通知，格式化为可注入的 user 消息（无通知返回 null）。 */
+    private String drainTaskNotifications() {
+        if (taskManager == null) {
+            return null;
+        }
+        var notifications = taskManager.drainNotifications();
+        if (notifications.isEmpty()) {
+            return null;
+        }
+        StringBuilder sb = new StringBuilder("<task-notification>");
+        for (var n : notifications) {
+            sb.append("\n<task id=\"").append(n.taskId()).append("\" agent=\"")
+                    .append(n.agentName()).append("\" status=\"").append(n.status()).append("\">\n")
+                    .append(n.summary()).append("\n</task>");
+        }
+        sb.append("\n</task-notification>");
+        return sb.toString();
     }
 
     /** ch12 F34/F35：/hooks 输出——按 event 分组、每条一行；无 hook 时提示。 */
@@ -698,6 +725,11 @@ public final class Tui {
             if (result.blocked()) {
                 renderer.failure("[hook " + result.blockingHookName() + "] " + result.reason());
                 return; // 阻止消息进入对话历史，焦点回输入框
+            }
+            // ch13 F5：注入上一轮后台子 Agent 的完成通知（主 Agent 下一轮可见）
+            String notifications = drainTaskNotifications();
+            if (notifications != null) {
+                session.append(Message.user(notifications));
             }
             session.append(Message.user(input)); // ch09：经 append 触发 JSONL 存档回调
         }
