@@ -1,7 +1,18 @@
 #!/bin/sh
 # Dino Code 启动脚本。
 # 先执行 `mvn package` 生成 target/dinocode.jar。
-DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+# 支持通过符号链接放到 PATH（如 ~/.local/bin/dinocode）全局调用：
+# 解析 $0 的真实路径再定位 jar，链接位置与项目位置解耦。
+SELF=$0
+# 逐层解析符号链接（POSIX 无 readlink -f 兜底；macOS/BSD readlink 不带 -f）
+while [ -L "$SELF" ]; do
+    TARGET=$(readlink "$SELF")
+    case $TARGET in
+        /*) SELF=$TARGET ;;                       # 绝对路径链接
+        *) SELF=$(dirname -- "$SELF")/$TARGET ;;  # 相对路径链接
+    esac
+done
+DIR=$(CDPATH= cd -- "$(dirname -- "$SELF")" && pwd)
 JAR="$DIR/target/dinocode.jar"
 if [ ! -f "$JAR" ]; then
     echo "未找到 $JAR，请先运行: mvn package" >&2
