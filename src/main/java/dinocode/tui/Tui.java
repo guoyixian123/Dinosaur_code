@@ -303,14 +303,14 @@ public final class Tui {
                     saveSessionQuietly();
                     return; // 输入行为空：退出
                 }
-                eraseInputFrame(); // 中断：擦框重画，半行文本留在历史
+                eraseInputFrame(e.getPartialLine().strip()); // 中断：擦框并保留已输入的半行
                 continue; // 输入行非空：清空当前行，继续等待输入
             } catch (EndOfFileException e) {
                 saveSessionQuietly();
                 return; // Ctrl+D
             }
 
-            eraseInputFrame(); // 提交后擦掉上下线：已发送的内容不带框，自然留在滚动区
+            eraseInputFrame(line.strip()); // 提交后擦框并以无框形式重打消息（N14/N15）
             String input = line.strip();
             if (input.isEmpty()) {
                 continue;
@@ -363,39 +363,46 @@ public final class Tui {
     }
 
     /**
-     * ch16：输入区上边线——左端鳞片纹样 ▄▀▄▄▀▄（随模式变色）+ 暗色横线，
-     * 宽度随终端窗口自适应（frameWidth）。
+     * ch16：输入区上边线——纯绿色横线（N15：去掉鳞片纹样 ▄▀▄▄▀▄），
+     * 宽度随终端窗口自适应（frameWidth），颜色随权限模式。
      */
     private void printInputTopBorder() {
-        int w = frameWidth();
-        out(modeColor() + "▄▀▄▄▀▄" + Ansi.DIM + "─".repeat(w - 7) + Ansi.RESET);
+        out(modeColor() + "─".repeat(frameWidth()) + Ansi.RESET);
     }
 
     /**
-     * ch16 N14：输入区下边线——<b>无换行</b>打印后光标上移 1 行回到中间空行，
-     * readLine 恰好在上下线之间画提示符；输入期间 JLine 只重绘光标行，下线不丢。
-     * 宽度与上线一致（窗口自适应）。
+     * ch16 N14/N15：输入区下边线——与上线<b>同色</b>（模式色，修复前误用 DIM 呈灰色）。
+     * 画在输入行下一行后光标上移回中间空行，readLine 恰好在上下线之间画提示符。
      */
     private void printInputBottomBorder() {
         int w = frameWidth();
         PrintWriter pw = terminal.writer();
         // 顺序敏感：光标此时在中间空行行首 → 先下移 1 行 → 在下一行画下线 → 上移回中间行
         pw.print("\r\n");                              // 进入下一行（下线行）
-        pw.print(Ansi.DIM + "─".repeat(w) + Ansi.RESET); // 画下线
+        pw.print(modeColor() + "─".repeat(w) + Ansi.RESET); // 下线与上线同色
         pw.print("\r\033[1A");                         // 回列首并上移 1 行到中间空行
         pw.flush();
     }
 
     /**
-     * ch16 N14：提交后擦掉上下两条边线——已发送的消息不再带框。
-     * readLine 返回时光标停在输入行：清本行回显，下移清预画下线，再上移复位。
+     * ch16 N14/N15：提交后擦掉整个框（上线+输入行+下线三行），再以无框形式重打
+     * 已发送消息——历史区不残框、不吞消息（修复前靠猜光标位置，两种赌错方向
+     * 分别表现为"历史带框"和"消息行被清没"）。
+     * readLine 返回时光标可能停在输入行或已因回车落到下线行；从当前位置向上
+     * 清两行、向下清一行，覆盖三行的所有落点可能，消息行随后重打。
      */
-    private void eraseInputFrame() {
+    private void eraseInputFrame(String sentText) {
         PrintWriter pw = terminal.writer();
-        pw.print("\033[2K\r");       // 清当前行（输入行回显）
-        pw.print("\033[1B\033[2K");  // 下移清掉预画的下线
-        pw.print("\033[1A\r");       // 回到行首原位
+        // 从光标当前位置起，向上清 2 行（上线/消息行的某种组合），向下清 1 行
+        pw.print("\r\033[2K");        // 清当前行
+        pw.print("\033[1A\r\033[2K"); // 上 1 行清
+        pw.print("\033[1A\r\033[2K"); // 上 2 行清（覆盖上线可能所在）
+        pw.print("\033[2B");          // 回到原位（向下 2 行）
+        pw.print("\033[1B\r\033[2K"); // 下 1 行清（覆盖下线可能所在）
+        pw.print("\033[1A\r");        // 回到原位行首
         pw.flush();
+        // 无框重打消息行，作为对话历史（模式色 ❯，与输入时视觉一致）
+        out(prompt() + sentText);
     }
 
     /** ch16：回合结束状态行（模式 · 模型 · 累计 tokens），DIM 弱化。 */
