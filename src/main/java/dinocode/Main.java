@@ -19,6 +19,7 @@ import dinocode.tui.Tui;
 
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.List;
 
 /**
  * 组装入口（见 spec 设计骨架）：
@@ -76,6 +77,26 @@ public final class Main {
                 .withAgentSpecs(agentSpecs);
         registry.register(agentTool);
 
+        // ch14：worktree 系统——管理器 + 会话级工具 + SubAgent 隔离 + 启动恢复 + 后台清理
+        dinocode.worktree.WorktreeManager worktreeManager = new dinocode.worktree.WorktreeManager(
+                root, List.of("node_modules"), 24);
+        registry.register(new dinocode.worktree.EnterWorktreeTool(worktreeManager, sesCtx.sessionId()));
+        registry.register(new dinocode.worktree.ExitWorktreeTool(worktreeManager, root));
+        agentTool.withWorktreeManager(worktreeManager);
+        // F9 启动恢复：持久化的 worktree 会话写回单例（目录仍存在才恢复）
+        dinocode.worktree.WorktreeSession savedSession = dinocode.worktree.WorktreeSessionStore.load(root);
+        if (savedSession != null && java.nio.file.Files.exists(java.nio.file.Path.of(savedSession.worktreePath()))) {
+            dinocode.worktree.WorktreeSessionStore.restoreSession(savedSession);
+        }
+        // F17 后台清理：每小时跑一次，24h 未动的孤儿 worktree 清掉（关停时 shutdown）
+        java.util.concurrent.ScheduledExecutorService worktreeCleanup =
+                java.util.concurrent.Executors.newSingleThreadScheduledExecutor(r -> {
+                    Thread th = new Thread(r, "worktree-cleanup");
+                    th.setDaemon(true);
+                    return th;
+                });
+        dinocode.worktree.StaleCleanup.startCleanupLoop(worktreeCleanup, root, 3600, 24);
+
         // ch09 F13~F16：JSONL 会话存档写入器 + Session 回调挂接
         dinocode.session.archive.Writer archiveWriter;
         try {
@@ -98,6 +119,7 @@ public final class Main {
                 .withTaskManager(taskManager)
                 .run();
         mcpManager.close(); // 正常退出路径（shutdown hook 兜底异常退出）
+        worktreeCleanup.shutdown(); // ch14 T12：停后台清理
         System.exit(exitCode);
     }
 

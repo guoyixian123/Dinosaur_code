@@ -32,6 +32,8 @@ public final class AgentTool implements Tool {
     private AgentLoader agentSpecs;
     private List<Message> parentConversation;
     private String parentModel = "";
+    /** ch14：worktree 管理器（可空 = 未启用隔离）。 */
+    private dinocode.worktree.WorktreeManager worktreeManager;
 
     /** 子 Agent 执行委托（由 Tui/Main 实现：构造子 Agent 并阻塞消费事件流）。 */
     public interface SubAgentRunnerDelegate {
@@ -77,6 +79,12 @@ public final class AgentTool implements Tool {
         return taskManager;
     }
 
+    /** ch14：注入 worktree 管理器（启用 isolation: worktree 隔离）。 */
+    public AgentTool withWorktreeManager(dinocode.worktree.WorktreeManager manager) {
+        this.worktreeManager = manager;
+        return this;
+    }
+
     @Override
     public String name() {
         return "Agent";
@@ -113,6 +121,10 @@ public final class AgentTool implements Tool {
                 "enum", typeEnum));
         props.put("run_in_background", Map.of("type", "boolean",
                 "description", "true = 后台执行，立即返回 task_id"));
+        props.put("isolation", Map.of(
+                "type", "string",
+                "description", "worktree = 在隔离的 git worktree 中执行（不影响主目录文件）",
+                "enum", List.of("worktree")));
         Map<String, Object> schema = new LinkedHashMap<>();
         schema.put("type", "object");
         schema.put("properties", props);
@@ -127,7 +139,7 @@ public final class AgentTool implements Tool {
 
     /** 解析参数（Jackson convertValue 失败 → 参数错误）。 */
     private record Args(String description, String prompt, String subagentType,
-                        boolean runInBackground) {
+                        boolean runInBackground, String isolation) {
     }
 
     private Args parseArgs(Map<String, Object> args) {
@@ -135,7 +147,8 @@ public final class AgentTool implements Tool {
                 str(args.get("description")),
                 str(args.get("prompt")),
                 str(args.get("subagent_type")),
-                Boolean.TRUE.equals(args.get("run_in_background")));
+                Boolean.TRUE.equals(args.get("run_in_background")),
+                str(args.get("isolation")));
     }
 
     private static String str(Object o) {
@@ -171,7 +184,7 @@ public final class AgentTool implements Tool {
         if (a.runInBackground()) {
             return runAsync(spec, a.prompt());
         }
-        return runSync(spec, a.prompt());
+        return runSync(spec, a.prompt(), a.isolation());
     }
 
     /** 查找 spec：优先 agentSpecs（Markdown 定义），回退三档 builtin。 */
@@ -192,15 +205,45 @@ public final class AgentTool implements Tool {
 
     // ---------- sync（T9） ----------
 
-    private Result runSync(SubAgentSpec spec, String prompt) {
+    private Result runSync(SubAgentSpec spec, String prompt, String isolation) {
         long start = System.nanoTime();
+        dinocode.worktree.AgentWorktree.Result wtResult = null;
+        String effectivePrompt = prompt;
         try {
+            // ch14 F11：isolation=worktree 时创建隔离工作区
+            if ("worktree".equals(isolation) && worktreeManager != null) {
+                try {
+                    byte[] rnd = new byte[4];
+                    new java.security.SecureRandom().nextBytes(rnd);
+                    String slug = "agent-a" + java.util.HexFormat.of().formatHex(rnd).substring(0, 7);
+                    wtResult = dinocode.worktree.AgentWorktree.create(
+                            slug, worktreeManager.getProjectRoot(), worktreeManager.getSymlinkDirs());
+                    String notice = dinocode.worktree.AgentWorktree.buildNotice(
+                            System.getProperty("user.dir"), wtResult.worktreePath());
+                    effectivePrompt = notice + "\n\n" + prompt;
+                } catch (Exception e) {
+                    return Result.error("Error creating agent worktree: " + e.getMessage());
+                }
+            }
             ToolRegistry filtered = ToolFilter.filterForAgent(parentRegistry, spec);
-            String output = delegate.runSubAgent(spec, prompt, filtered, List.of());
+            String output = delegate.runSubAgent(spec, effectivePrompt, filtered, List.of());
             long elapsedMs = (System.nanoTime() - start) / 1_000_000;
-            return Result.ok(String.format("Agent \"%s\" completed in %d.%03ds.%n%n%s",
-                    spec.name(), elapsedMs / 1000, elapsedMs % 1000, output));
+            // ch14 F12：完成后按变更决策——干净自动清理，脏则保留并附加信息
+            String wtInfo = "";
+            if (wtResult != null) {
+                if (dinocode.worktree.WorktreeChanges.hasChanges(
+                        wtResult.worktreePath(), wtResult.headCommit())) {
+                    wtInfo = String.format("%n%nWorktree kept at %s (branch %s) — has uncommitted changes or new commits.",
+                            wtResult.worktreePath(), wtResult.worktreeBranch());
+                } else {
+                    dinocode.worktree.AgentWorktree.remove(
+                            wtResult.worktreePath(), wtResult.worktreeBranch(), wtResult.gitRoot());
+                }
+            }
+            return Result.ok(String.format("Agent \"%s\" completed in %d.%03ds.%n%n%s%s",
+                    spec.name(), elapsedMs / 1000, elapsedMs % 1000, output, wtInfo));
         } catch (Exception e) {
+            // 隔离失败时保留 worktree 供检查（fail-closed 语义）
             return Result.error("Agent \"" + spec.name() + "\" failed: "
                     + (e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage()));
         }
