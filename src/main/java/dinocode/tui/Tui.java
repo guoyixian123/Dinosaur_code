@@ -294,6 +294,7 @@ public final class Tui {
     private void loop() {
         while (true) {
             printInputTopBorder();
+            printInputBottomBorder(); // 下线先画在下一行（N14）
             String line;
             try {
                 line = reader.readLine(prompt());
@@ -302,14 +303,14 @@ public final class Tui {
                     saveSessionQuietly();
                     return; // 输入行为空：退出
                 }
-                printInputBottomBorder(); // 中断也要闭合输入区
+                eraseInputFrame(); // 中断：上下线都擦掉重画
                 continue; // 输入行非空：清空当前行，继续等待输入
             } catch (EndOfFileException e) {
                 saveSessionQuietly();
                 return; // Ctrl+D
             }
 
-            printInputBottomBorder(); // 提交即闭合：框只包住输入行（spec §3.3）
+            eraseInputFrame(); // 提交后擦掉上下线：已发送的内容不框（N14），正文自然留在滚动区
             String input = line.strip();
             if (input.isEmpty()) {
                 continue;
@@ -357,7 +358,6 @@ public final class Tui {
 
     /**
      * ch16：输入区上边线——左端鳞片纹样 ▄▀▄▄▀▄（随模式变色）+ 暗色横线。
-     * 只在等待输入时绘制，标记"输入区从这里开始"（spec §3.3）。
      * 窄终端（<30 列）或宽度未知时跳过。
      */
     private void printInputTopBorder() {
@@ -370,8 +370,9 @@ public final class Tui {
     }
 
     /**
-     * ch16：输入区下边线——输入提交（readLine 返回）后立即闭合，框只包住输入行；
-     * 回复内容在框外向下流动。总宽度与上边线一致。
+     * ch16 N14：输入区下边线——在光标进入输入行之前预画在下一行，
+     * 与上线一起把正在编辑的输入行完整围住。readLine 期间 JLine 只重绘
+     * 光标所在行，下一行的下线不会被冲掉。
      */
     private void printInputBottomBorder() {
         int width = safeWidth();
@@ -380,6 +381,25 @@ public final class Tui {
         }
         int inner = Math.min(width - 2, 60) - 8;
         out(Ansi.DIM + "─".repeat(Math.max(4, inner) + 6) + Ansi.RESET);
+    }
+
+    /**
+     * ch16 N14：提交后擦掉上下两条边线——已发送的消息不再带框。
+     * 实现：readLine 返回时光标在输入行行尾；先回车下移到下线行清除，
+     * 再上移回输入行清除（JLine 回显的输入文本随行一起清掉）。
+     * 光标控制失败则放弃擦除（边线留存，不影响功能）。
+     */
+    private void eraseInputFrame() {
+        int width = safeWidth();
+        if (width < 30) {
+            return;
+        }
+        PrintWriter w = terminal.writer();
+        // 下移 1 行清掉下线，再回上 1 行清掉输入行回显（上线留在其上一行）
+        w.print("\033[1B\r\033[2K"); // ↓ 清下线
+        w.print("\033[1A\r\033[2K"); // ↑ 清输入行（含已提交文本的回显）
+        w.print("\r");               // 回行首
+        w.flush();
     }
 
     /** ch16：回合结束状态行（模式 · 模型 · 累计 tokens），DIM 弱化。 */
@@ -675,6 +695,9 @@ public final class Tui {
         // ch12 F9：SessionStart（/clear 新建会话后）
         ensureSessionAgent();
         sessionAgent.dispatchSessionHook(dinocode.hook.Event.SESSION_START, sessionId(), Map.of());
+        // 界面反馈：重新打印状态面板（修复前只改内部状态，用户看不出会话已切换）
+        renderer.notice("已开启新会话");
+        Banner.printStatusPanel(terminal.writer(), provider.model(), "新会话", mode.displayName());
     }
 
     private void turn(String input) {
@@ -791,6 +814,9 @@ public final class Tui {
             sessionAgent.dispatchSessionHook(dinocode.hook.Event.SESSION_RESUME, info.id(), Map.of());
             // 4. F24：原新会话的 JSONL 保留不删
             renderer.notice("已恢复会话 " + info.id() + "，共 " + msgs.size() + " 条消息");
+            // 界面反馈：历史消息回显（修复前上下文只进了模型，界面空白如未恢复）
+            renderHistory(msgs);
+            Banner.printStatusPanel(terminal.writer(), provider.model(), info.id(), mode.displayName());
         } catch (Exception e) {
             renderer.failure("恢复失败: " + e.getMessage()); // N5 单点错误降级
         }
@@ -804,6 +830,41 @@ public final class Tui {
             return String.format("%.1fKB", bytes / 1024.0);
         }
         return String.format("%.1fMB", bytes / 1024.0 / 1024);
+    }
+
+    /** /resume 后把恢复的历史消息渲染回终端（只回显，不再触发存档/hook/Agent）。 */
+    private void renderHistory(List<Message> msgs) {
+        renderer.notice("── 以下为历史消息 ──");
+        for (Message m : msgs) {
+            switch (m.role()) {
+                case USER -> {
+                    // system-reminder 类注入消息不回显，只显示真实用户输入
+                    if (m.content().startsWith("<system-reminder>") || m.content().startsWith("<team-notification>")
+                            || m.content().startsWith("<task-notification>")) {
+                        continue;
+                    }
+                    renderer.notice("❯ " + firstLine(m.content()));
+                }
+                case ASSISTANT -> renderer.text(firstLine(m.content()) + "\n");
+                case TOOL -> {
+                    // 工具结果折叠为摘要行（取首条结果首行）
+                    if (!m.toolResults().isEmpty()) {
+                        renderer.toolSummary(firstLine(m.toolResults().get(0).content()), false);
+                    }
+                }
+            }
+        }
+        renderer.notice("── 历史结束 ──");
+    }
+
+    /** 取首行（回显摘要用）；空安全。 */
+    private static String firstLine(String s) {
+        if (s == null || s.isEmpty()) {
+            return "";
+        }
+        int idx = s.indexOf('\n');
+        String line = idx < 0 ? s : s.substring(0, idx);
+        return line.length() > 120 ? line.substring(0, 120) + "…" : line;
     }
 
     private void turn(String input, boolean intoHistory) {

@@ -47,6 +47,15 @@ final class Banner {
         out.flush();
     }
 
+    /**
+     * 状态面板单印（/new 开新会话、/resume 恢复后重新显示——修复前这两个命令
+     * 只改内部状态不碰界面，用户看不出任何变化）。大字标不重打，只出面板。
+     */
+    static void printStatusPanel(PrintWriter out, String model, String sessionInfo, String modeName) {
+        printPanel(out, "模型 " + model, "会话 " + sessionInfo, "模式 " + modeName);
+        out.flush();
+    }
+
     /** 圆角状态面板：每项一行，宽度按最长项自适应（spec §3.1）。 */
     private static void printPanel(PrintWriter out, String... items) {
         int width = 0;

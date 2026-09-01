@@ -108,7 +108,8 @@ class TeamTest {
     void teamCrudAndMembers() {
         TeamManager mgr = new TeamManager(tempDir.resolve("teams"));
         TeamManager.Team team = mgr.createTeam("dev");
-        assertEquals(TeamManager.TeamMode.IN_PROCESS, team.mode()); // TempDir 环境无 tmux env（可能检测出 tmux——断言其一）
+        assertTrue(team.mode() == TeamManager.TeamMode.IN_PROCESS || team.mode() == TeamManager.TeamMode.TMUX,
+                "detectBackend 只可能返回 IN_PROCESS 或 TMUX，本机装了 tmux 时为 TMUX");
         assertTrue(mgr.getTeam("dev") != null);
 
         team.addMember(new TeamManager.Member("alice", new Object(), new Object()));
