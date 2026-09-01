@@ -91,6 +91,8 @@ public final class Tui {
     private Agent sessionAgent;
     // ch13：子 Agent 任务管理器（通知注入 + fork 父对话引用）
     private dinocode.subagent.SubAgentTaskManager taskManager;
+    // ch15：团队管理器（Lead 通知 drain + Coordinator 过滤）
+    private dinocode.teams.TeamManager teamMgr;
 
     public Tui(AppConfig config, ChatProvider provider, ToolRegistry registry, PermissionEngine engine,
                CompactContext compact, SessionStore store, Session session, boolean restored) {
@@ -127,6 +129,24 @@ public final class Tui {
     public Tui withTaskManager(dinocode.subagent.SubAgentTaskManager taskManager) {
         this.taskManager = taskManager;
         return this;
+    }
+
+    /** ch15：注入团队管理器（Lead 邮箱 drain + Coordinator Mode）。 */
+    public Tui withTeamManager(dinocode.teams.TeamManager teamMgr) {
+        this.teamMgr = teamMgr;
+        return this;
+    }
+
+    /** ch15 F13：抽取所有团队 Lead 邮箱未读，包成 team-notification 消息（无通知返回 null）。 */
+    private String drainTeamNotifications() {
+        if (teamMgr == null) {
+            return null;
+        }
+        List<String> notifications = dinocode.teams.TeammateRunner.drainLeadMailbox(teamMgr);
+        if (notifications.isEmpty()) {
+            return null;
+        }
+        return String.join("\n\n", notifications);
     }
 
     /** ch13 F5：取出后台子 Agent 的完成通知，格式化为可注入的 user 消息（无通知返回 null）。 */
@@ -726,6 +746,11 @@ public final class Tui {
                 renderer.failure("[hook " + result.blockingHookName() + "] " + result.reason());
                 return; // 阻止消息进入对话历史，焦点回输入框
             }
+            // ch15 F13：注入团队 Lead 邮箱通知（队员完成/idle/消息）
+            String teamNotifications = drainTeamNotifications();
+            if (teamNotifications != null) {
+                session.append(Message.user(teamNotifications));
+            }
             // ch13 F5：注入上一轮后台子 Agent 的完成通知（主 Agent 下一轮可见）
             String notifications = drainTaskNotifications();
             if (notifications != null) {
@@ -744,7 +769,7 @@ public final class Tui {
         turnCancel = cancel;
         spinner.start();
         try (TurnStream stream = new Agent(provider, registry, "0.1.0", engine, compact, memMgr,
-                instructionText + skillContext(), memoryText, hookEngine)
+                instructionText + skillContext(), memoryText, hookEngine, teamMgr)
                 .run(session.getMessages(), currentMaxTokens(), mode, cancel)) {
             TurnEvent event;
             while ((event = stream.next()) != null) {

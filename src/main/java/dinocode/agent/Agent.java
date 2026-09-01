@@ -72,6 +72,8 @@ public final class Agent {
     private final java.util.concurrent.atomic.AtomicLong turnCount = new java.util.concurrent.atomic.AtomicLong();
     /** ch12：Hook 引擎（可空 = 未配置 hooks）。 */
     private final dinocode.hook.HookEngine hookEngine;
+    /** ch15：团队管理器（可空）；非空且 listTeams 非空时启用 Coordinator 工具过滤（N4）。 */
+    private final dinocode.teams.TeamManager teamMgr;
     /** ch12 F20/F33：hook prompt 注入队列（本轮有效，streamOnce 前取出清空）。 */
     private final java.util.List<String> pendingReminders = new ArrayList<>();
     private final java.util.concurrent.locks.ReentrantLock reminderLock = new java.util.concurrent.locks.ReentrantLock();
@@ -83,13 +85,13 @@ public final class Agent {
     private final java.util.Deque<Outcome> scriptedOutcomes;
 
     public Agent(ChatProvider provider, ToolRegistry registry, String version, PermissionEngine engine) {
-        this(provider, registry, version, engine, null, null, "", "");
+        this(provider, registry, version, engine, null, null, "", "", null, null);
     }
 
     /** 测试用：预置人在回路决策（依序消费；耗尽后阻塞等待真实回传）。 */
     public Agent(ChatProvider provider, ToolRegistry registry, String version, PermissionEngine engine,
                  java.util.Deque<Outcome> scriptedOutcomes) {
-        this(provider, registry, version, engine, null, null, "", "", null, scriptedOutcomes);
+        this(provider, registry, version, engine, null, null, "", "", null, null, scriptedOutcomes);
     }
 
     /** 完整构造：ch08 上下文管理 + ch09 记忆 + ch10/12 引擎。 */
@@ -103,14 +105,24 @@ public final class Agent {
     public Agent(ChatProvider provider, ToolRegistry registry, String version, PermissionEngine engine,
                  CompactContext compact, dinocode.memory.Memory.Manager memMgr,
                  String instructionText, String memoryText, dinocode.hook.HookEngine hookEngine) {
-        this(provider, registry, version, engine, compact, memMgr, instructionText, memoryText, hookEngine, null);
+        this(provider, registry, version, engine, compact, memMgr, instructionText, memoryText, hookEngine, null, null);
+    }
+
+    /** ch15：完整构造（含团队管理器）。 */
+    public Agent(ChatProvider provider, ToolRegistry registry, String version, PermissionEngine engine,
+                 CompactContext compact, dinocode.memory.Memory.Manager memMgr,
+                 String instructionText, String memoryText, dinocode.hook.HookEngine hookEngine,
+                 dinocode.teams.TeamManager teamMgr) {
+        this(provider, registry, version, engine, compact, memMgr, instructionText, memoryText,
+                hookEngine, teamMgr, null);
     }
 
     private Agent(ChatProvider provider, ToolRegistry registry, String version, PermissionEngine engine,
                   CompactContext compact, dinocode.memory.Memory.Manager memMgr,
                   String instructionText, String memoryText, dinocode.hook.HookEngine hookEngine,
-                  java.util.Deque<Outcome> scriptedOutcomes) {
+                  dinocode.teams.TeamManager teamMgr, java.util.Deque<Outcome> scriptedOutcomes) {
         this.hookEngine = hookEngine;
+        this.teamMgr = teamMgr;
         this.provider = provider;
         this.registry = registry;
         this.version = version == null ? "" : version;
@@ -130,7 +142,7 @@ public final class Agent {
     /** 无权限引擎但有压缩上下文（兼容 ch08 调用点）。 */
     public Agent(ChatProvider provider, ToolRegistry registry, String version, PermissionEngine engine,
                  CompactContext compact) {
-        this(provider, registry, version, engine, compact, null, "", "");
+        this(provider, registry, version, engine, compact, null, "", "", null, null);
     }
 
     /**
@@ -645,6 +657,18 @@ public final class Agent {
                             "tool_input", parseArgs(call.arguments()),
                             "tool_result", hookBlock,
                             "is_error", true));
+                    i++;
+                    continue;
+                }
+
+                // ch15 N4：Coordinator Mode——有活跃团队时 Lead 只能用调度白名单工具
+                if (teamMgr != null && !teamMgr.listTeams().isEmpty()
+                        && !dinocode.teams.Coordinator.isCoordinatorTool(call.name())) {
+                    String reason = "协调模式：拥有团队时仅可使用调度类工具（SendMessage/TaskCreate 等），"
+                            + "具体执行请分派给队员";
+                    queue.put(new TurnEvent.ToolStart(call.name(), preview(call.arguments())));
+                    results[i] = new ToolResult(call.id(), reason, true);
+                    queue.put(new TurnEvent.ToolEnd(call.name(), reason, true));
                     i++;
                     continue;
                 }

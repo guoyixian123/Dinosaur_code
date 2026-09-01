@@ -443,13 +443,14 @@ class SubAgentTest {
     }
 
     @Test
-    void teamPathReservedForLaterChapter() {
+    void teamPathRequiresTeamManager() {
+        // ch15：team_name 命中但未注入 TeamManager → 报错（teamMgr == null 分支）
         var tool = new AgentTool(parentRegistry(), (spec, prompt, filtered, history) -> "x")
                 .withParentConversation(List.of(Message.user("x")));
         var result = tool.execute(Map.of("description", "d", "prompt", "p",
                 "subagent_type", "general-purpose", "team_name", "alpha"));
         assertTrue(result.isError());
-        assertTrue(result.content().contains("later chapter"));
+        assertTrue(result.content().contains("team support not configured"));
     }
 
     // ---------- T7：schema ----------

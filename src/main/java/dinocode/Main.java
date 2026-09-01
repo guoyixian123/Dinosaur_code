@@ -97,6 +97,19 @@ public final class Main {
                 });
         dinocode.worktree.StaleCleanup.startCleanupLoop(worktreeCleanup, root, 3600, 24);
 
+        // ch15：Agent 团队——TeamManager + 三件套工具 + AgentTool 团队分支
+        dinocode.teams.TeamManager teamMgr = new dinocode.teams.TeamManager(
+                dinocode.teams.TeamManager.teamsBaseDir());
+        registry.register(new dinocode.teams.TeamTools.TeamCreateTool(teamMgr));
+        registry.register(new dinocode.teams.TeamTools.TeamDeleteTool(teamMgr));
+        registry.register(new dinocode.teams.TeamTools.SendMessageTool(teamMgr, "lead"));
+        agentTool.withTeamManager(teamMgr);
+        dinocode.teams.TeammateRunner.SingleTurnRunner teamRunner =
+                (Object agent, Object conv, java.util.List<dinocode.core.Message> seed) ->
+                        subExecutor.run((dinocode.subagent.SubAgentSpec) agent, null,
+                                registry, seed);
+        agentTool.withTeammateRunner(teamRunner);
+
         // ch09 F13~F16：JSONL 会话存档写入器 + Session 回调挂接
         dinocode.session.archive.Writer archiveWriter;
         try {
@@ -117,9 +130,11 @@ public final class Main {
                 .withArchive(archiveWriter, memMgr, instructionText, memoryText, root)
                 .withHookEngine(hookEngine)
                 .withTaskManager(taskManager)
+                .withTeamManager(teamMgr)
                 .run();
         mcpManager.close(); // 正常退出路径（shutdown hook 兜底异常退出）
         worktreeCleanup.shutdown(); // ch14 T12：停后台清理
+        teamMgr.closeAll(); // ch15 T15：中断所有队员虚拟线程
         System.exit(exitCode);
     }
 

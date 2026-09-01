@@ -5,6 +5,7 @@ import dinocode.tool.Result;
 import dinocode.tool.Tool;
 import dinocode.tool.ToolRegistry;
 
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -34,6 +35,8 @@ public final class AgentTool implements Tool {
     private String parentModel = "";
     /** ch14：worktree 管理器（可空 = 未启用隔离）。 */
     private dinocode.worktree.WorktreeManager worktreeManager;
+    /** ch15：团队管理器（可空 = 团队功能未启用）。 */
+    private dinocode.teams.TeamManager teamMgr;
 
     /** 子 Agent 执行委托（由 Tui/Main 实现：构造子 Agent 并阻塞消费事件流）。 */
     public interface SubAgentRunnerDelegate {
@@ -82,6 +85,12 @@ public final class AgentTool implements Tool {
     /** ch14：注入 worktree 管理器（启用 isolation: worktree 隔离）。 */
     public AgentTool withWorktreeManager(dinocode.worktree.WorktreeManager manager) {
         this.worktreeManager = manager;
+        return this;
+    }
+
+    /** ch15：注入团队管理器（启用 team_name 分支）。 */
+    public AgentTool withTeamManager(dinocode.teams.TeamManager teamMgr) {
+        this.teamMgr = teamMgr;
         return this;
     }
 
@@ -139,7 +148,8 @@ public final class AgentTool implements Tool {
 
     /** 解析参数（Jackson convertValue 失败 → 参数错误）。 */
     private record Args(String description, String prompt, String subagentType,
-                        boolean runInBackground, String isolation) {
+                        boolean runInBackground, String isolation, String teamName,
+                        String memberName) {
     }
 
     private Args parseArgs(Map<String, Object> args) {
@@ -148,7 +158,9 @@ public final class AgentTool implements Tool {
                 str(args.get("prompt")),
                 str(args.get("subagent_type")),
                 Boolean.TRUE.equals(args.get("run_in_background")),
-                str(args.get("isolation")));
+                str(args.get("isolation")),
+                str(args.get("team_name")),
+                str(args.get("name")));
     }
 
     private static String str(Object o) {
@@ -178,13 +190,80 @@ public final class AgentTool implements Tool {
                     + "'. Available: " + (agentSpecs != null ? agentSpecs.listNames()
                     : List.of("general-purpose", "plan", "explore")));
         }
-        if (args.containsKey("team_name")) {
-            return Result.error("Error: team support arrives in a later chapter"); // ch15 预留
+        // ch15 F11/T14：team_name 命中走团队分支
+        if (a.teamName() != null && !a.teamName().isBlank()) {
+            if (teamMgr == null) {
+                return Result.error("Error: team support not configured");
+            }
+            return runAsTeammate(a.teamName(), a.memberName(), a.description(), a.prompt(),
+                    a.runInBackground());
         }
         if (a.runInBackground()) {
             return runAsync(spec, a.prompt());
         }
         return runSync(spec, a.prompt(), a.isolation());
+    }
+
+    // ---------- team（ch15 T14/F11） ----------
+
+    /** 队员的 SingleTurnRunner（Main 注入）：内部走 SubAgentExecutor。 */
+    private dinocode.teams.TeammateRunner.SingleTurnRunner teammateRunner;
+
+    public AgentTool withTeammateRunner(dinocode.teams.TeammateRunner.SingleTurnRunner runner) {
+        this.teammateRunner = runner;
+        return this;
+    }
+
+    /** 队员工具集：在父 registry 复制基础上补 SendMessage（队员用它沟通，N5）。 */
+    private ToolRegistry teammateTools() {
+        ToolRegistry tools = new ToolRegistry();
+        for (Tool t : parentRegistry.toolsAll()) {
+            try {
+                tools.register(t);
+            } catch (IllegalArgumentException ignored) {
+                // 重名跳过
+            }
+        }
+        tools.register(new dinocode.teams.TeamTools.SendMessageTool(teamMgr, "member"));
+        return tools;
+    }
+
+    private Result runAsTeammate(String teamName, String memberNameArg, String description,
+                                 String prompt, boolean runInBackground) {
+        var team = teamMgr.getTeam(teamName);
+        if (team == null) {
+            return Result.error("Error: team '" + teamName
+                    + "' not found. Create it first with TeamCreate.");
+        }
+        // memberName 缺省用 description 生成 + 去重（同 F18 语义）
+        String name = memberNameArg != null && !memberNameArg.isBlank()
+                ? memberNameArg
+                : description.toLowerCase().replaceAll("\\s+", "-");
+        if (name.length() > 30) {
+            name = name.substring(0, 30);
+        }
+        String finalName = name;
+        int suffix = 2;
+        while (team.hasMember(finalName)) {
+            finalName = name + "-" + suffix++;
+        }
+        // 队员身份 addendum（F14/N5）：告知身份/队友/必须 SendMessage/自动 idle
+        List<String> others = new ArrayList<>(team.memberNames());
+        String addendum = dinocode.teams.TeammateRunner.buildTeammateAddendum(
+                teamName, finalName, others);
+        if (teammateRunner == null) {
+            return Result.error("Error: teammate runner not configured");
+        }
+        dinocode.teams.TeammateRunner.SingleTurnRunner turnRunner =
+                (Object agent, Object conv, List<Message> seedMessages) ->
+                        teammateRunner.runOneTurn(agent, conv, seedMessages);
+        dinocode.teams.SpawnDispatcher.SpawnConfig config =
+                new dinocode.teams.SpawnDispatcher.SpawnConfig(
+                        team, finalName, prompt, System.getProperty("user.dir"), addendum);
+        var result = dinocode.teams.SpawnDispatcher.spawnTeammate(config, turnRunner);
+        return Result.ok(String.format(
+                "Teammate \"%s\" spawned in team \"%s\" (mode: %s). The teammate is now working on the assigned task.",
+                finalName, teamName, result.mode().name().toLowerCase()));
     }
 
     /** 查找 spec：优先 agentSpecs（Markdown 定义），回退三档 builtin。 */
