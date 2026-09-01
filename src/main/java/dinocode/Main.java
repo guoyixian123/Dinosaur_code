@@ -30,16 +30,9 @@ public final class Main {
         AppConfig config = loadConfig(args);
 
         SessionStore store = SessionStore.defaultStore();
-        SessionStore.LoadResult loaded = store.loadLatest();
-        if (loaded.hadCorrupt()) {
-            System.out.println("提示: 检测到损坏的会话文件，已跳过");
-        }
-
-        boolean restored = loaded.session() != null;
-        Session session = restored
-                ? loaded.session()
-                : new Session(SessionStore.newSessionId(),
-                        System.currentTimeMillis(), new ArrayList<>(), SessionSettings.EMPTY);
+        // ch09 起启动永远开新会话；恢复走 /resume（JSONL 会话列表），不再自动加载 JSON 旧会话
+        Session session = new Session(SessionStore.newSessionId(),
+                System.currentTimeMillis(), new ArrayList<>(), SessionSettings.EMPTY);
 
         ChatProvider provider = ProviderFactory.create(config);
         ToolRegistry registry = ToolRegistry.createDefault();
@@ -99,7 +92,7 @@ public final class Main {
         Thread.ofVirtual().start(() -> dinocode.session.archive.SessionArchive.cleanExpired(
                 root.resolve(".dino").resolve("sessions"), java.time.Duration.ofDays(30)));
 
-        int exitCode = new Tui(config, provider, registry, engine, compact, store, session, restored)
+        int exitCode = new Tui(config, provider, registry, engine, compact, store, session, false)
                 .withArchive(archiveWriter, memMgr, instructionText, memoryText, root)
                 .withHookEngine(hookEngine)
                 .withTaskManager(taskManager)
