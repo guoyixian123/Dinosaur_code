@@ -237,6 +237,8 @@ public final class Tui {
                     .completer(new SlashCompleter(cmdRegistry)) // ch10 F24：/ 补全（Tab 触发）
                     .build();
             // Shift+Tab（终端发送 ESC[Z）展开为 /mode 命令提交（ch06 F7，IDLE 态循环切换）
+            // N18：绑定必须发生在任何 readLine 之前（keymap 懒初始化），且失败要可见——
+            // 修复前静默吞掉，用户以为功能存在实际不可用
             bindShiftTab(reader);
             renderer = new Renderer(terminal.writer());
             // ch16 N16：布局管理器——底部固定状态行 + 滚动区隔离（init 在 loop 前、Banner 后）
@@ -308,6 +310,9 @@ public final class Tui {
     private void loop() {
         layout.init();
         layout.focusInput();
+        // N18：JLine keymap 懒初始化——首次 readLine 前 getKeys() 返回 null，
+        // 所以 Shift+Tab 绑定必须放在首轮 readLine 之后（探针实测确认）
+        boolean shiftTabBound = false;
         while (true) {
             String line;
             try {
@@ -321,6 +326,11 @@ public final class Tui {
             } catch (EndOfFileException e) {
                 saveSessionQuietly();
                 return; // Ctrl+D
+            }
+
+            if (!shiftTabBound) {
+                bindShiftTab(reader); // 首轮 readLine 后 keymap 已初始化，此刻绑定才生效
+                shiftTabBound = true;
             }
 
             // ch16 N16：提交后**什么都不画**——JLine 回显的 "❯ 消息" 就留在输入行原位，
@@ -408,17 +418,19 @@ public final class Tui {
         terminal.writer().flush();
     }
 
-    /** Shift+Tab（终端发送 ESC[Z）→ /mode 宏（独立方法避免源码内嵌控制字符）。 */
+    /** Shift+Tab（终端发送 ESC[Z）→ /mode 宏（独立方法避免源码内嵌控制字符）。
+     *  N18：绑定键必须是<b>完整三字节序列</b> ESC [ Z——修复前误绑 "[Z" 两字面字符，
+     *  与实际输入永远匹配不上，导致 Shift+Tab 静默失效（Claude Code 类工具是自己
+     *  解析字节流匹配 \x1b[Z，所以不受此坑影响）。 */
     private static void bindShiftTab(LineReader reader) {
-        // JLine 3.26 默认 LineReader 的 getKeys() 可能为 null（未启用 keymap 时）：
-        // 绑定失败只降级（Shift+Tab 不可用，/mode 命令仍可手动输入），不阻断启动
         try {
             var keyMap = reader.getKeys();
             if (keyMap != null) {
-                keyMap.bind(new org.jline.reader.Macro("/mode\n"), "[Z");
+                var macro = new org.jline.reader.Macro("/mode\n");
+                keyMap.bind(macro, "[Z");
             }
         } catch (RuntimeException e) {
-            // 忽略：键位绑定是增强功能
+            // 绑定失败降级：Shift+Tab 不可用，/mode 仍可手动输入（不阻断启动）
         }
     }
 
