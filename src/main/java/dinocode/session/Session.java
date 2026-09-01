@@ -100,6 +100,13 @@ public final class Session {
         }
     }
 
+    /** 只触发整体替换存档回调（Agent 自动压缩重建历史时；列表内容已就地更新）。 */
+    public void archiveReplaceOnly(List<Message> msgs) {
+        if (onReplace != null) {
+            onReplace.accept(msgs);
+        }
+    }
+
     /** 追加一条消息并触发 onAppend 回调（F44）。注意：此方法不写 lastActive。 */
     public void append(Message msg) {
         messages.add(msg);

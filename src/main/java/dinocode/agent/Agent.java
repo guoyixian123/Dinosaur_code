@@ -913,7 +913,7 @@ public final class Agent {
     }
 
     /** 保证历史以 assistant 文本回合收尾（F6：取消/出错/上限后角色交替不破坏）。 */
-    private static void ensureAssistantTail(List<Message> history, String fallback) {
+    private void ensureAssistantTail(List<Message> history, String fallback) {
         Optional<Role> last = history.isEmpty()
                 ? Optional.empty()
                 : Optional.of(history.get(history.size() - 1).role());

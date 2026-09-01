@@ -897,6 +897,9 @@ public final class Tui {
         spinner.start();
         try (TurnStream stream = new Agent(provider, registry, "0.1.0", engine, compact, memMgr,
                 instructionText + skillContext(), memoryText, hookEngine, teamMgr)
+                // ch09 存档增量：assistant/tool 消息经此钩子进 JSONL（修复前只有 user 消息入档，/resume 缺回复）
+                .withArchiveSink(session::archiveOnly)
+                .withArchiveReplaceSink(session::archiveReplaceOnly)
                 .run(session.getMessages(), currentMaxTokens(), mode, cancel)) {
             TurnEvent event;
             while ((event = stream.next()) != null) {
