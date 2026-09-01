@@ -1,0 +1,67 @@
+<h2>只显示 DINO —— 两种字体候选</h2>
+<p class="subtitle">收到:DINO CODE 太长,只保留 DINO;Code 降级为下方小字副标题。你说"分不清字母",所以放大展示两种字体,选清晰的那种。点击选择。</p>
+
+<style>
+  .term {
+    background: #16181d;
+    font-family: "SF Mono", Menlo, Consolas, "Courier New", monospace;
+    padding: 20px 24px;
+    border-radius: 10px;
+    white-space: pre;
+    overflow-x: auto;
+    font-size: 15px;
+    line-height: 1.25;
+  }
+  .term .fig { color:#9ece6a; }
+  .term .sub { color:#565f89; }
+  .term .cyn { color:#4fd6be; }
+  .term .wht { color:#c0caf5; }
+  .term .ylw { color:#e0af68; }
+  h4 { margin: 14px 0 4px; color:#7dd05e; }
+</style>
+
+<div class="options">
+
+  <div class="option" data-choice="shadow" onclick="toggleSelect(this)">
+    <div class="letter">A</div>
+    <div class="content">
+      <h3>实心块字体(ANSI Shadow)—— 粗壮醒目</h3>
+      <p>全由 █ ╗ ║ 等块字符构成,大而实。这版每个字母独立、间距加大,不会再黏在一起。</p>
+      <div class="term"><span class="fig">██████╗ ██╗ ███╗   ██╗  ██████╗ </span>
+<span class="fig">██╔══██╗██║ ████╗  ██║██╔═══██╗</span>
+<span class="fig">██║  ██║██║ ██╔██╗ ██║██║   ██║</span>
+<span class="fig">██║  ██║██║ ██║╚██╗██║██║   ██║</span>
+<span class="fig">██████╔╝██║ ██║ ╚████║╚██████╔╝</span>
+<span class="fig">╚═════╝ ╚═╝ ╚═╝  ╚═══╝ ╚═════╝ </span>
+<span class="sub">        D i n o   C o d e   v0.1</span>
+
+<span class="cyn">╭─────────────────────────────────╮</span>
+<span class="cyn">│</span> <span class="sub">模型</span> <span class="wht">glm-4.7</span>  <span class="sub">会话</span> <span class="wht">新会话</span> <span class="cyn">│</span>
+<span class="cyn">╰─────────────────────────────────╯</span></div>
+      <div class="subtitle">宽度 33 列,任何终端都放得下</div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="standard" onclick="toggleSelect(this)">
+    <div class="letter">B</div>
+    <div class="content">
+      <h3>描线字体(figlet Standard)—— 极简清晰</h3>
+      <p>只用 <b>/ \ _ | ( )</b> 等基础 ASCII 字符,像手绘线条。字面辨识度最高——每个字母一眼可读,不可能认错。</p>
+      <div class="term"><span class="fig"> ____  _  _   _  ____ </span>
+<span class="fig">|  _ \(_)| \ | |/ ___|</span>
+<span class="fig">| | | | ||  \| |\___ \</span>
+<span class="fig">| |_| | || |\  | ___) |</span>
+<span class="fig">|____/|_||_| \_||____/</span>
+<span class="sub">       D i n o   C o d e   v0.1</span>
+
+<span class="cyn">╭─────────────────────────────────╮</span>
+<span class="cyn">│</span> <span class="sub">模型</span> <span class="wht">glm-4.7</span>  <span class="sub">会话</span> <span class="wht">新会话</span> <span class="cyn">│</span>
+<span class="cyn">╰─────────────────────────────────╯</span></div>
+      <div class="subtitle">纯 ASCII,零渲染风险,22 列宽</div>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <p class="subtitle">两个方案都已在字母间加空隙、O/D 明显区分。选一个,我就锁定设计写文档。</p>
+</div>

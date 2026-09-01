@@ -67,7 +67,9 @@ public final class GlobTool implements Tool {
         Path root = Path.of(a.path() == null || a.path().isBlank() ? "." : a.path());
         List<String> matches = new ArrayList<>();
         try (Stream<Path> walk = Files.walk(root)) {
-            Iterator<Path> it = walk.filter(Files::isRegularFile).iterator();
+            // NOFOLLOW：文件符号链接不作为 regular file 遍历（同 Grep，防沙箱外内容外泄）
+            Iterator<Path> it = walk.filter(p -> Files.isRegularFile(p,
+                    java.nio.file.LinkOption.NOFOLLOW_LINKS)).iterator();
             while (it.hasNext()) {
                 String rel = root.relativize(it.next()).toString();
                 if (matchGlob(a.pattern(), rel)) {

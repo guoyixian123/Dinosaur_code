@@ -88,6 +88,7 @@ public final class EditFileTool implements Tool {
         } catch (IOException e) {
             return Result.error("写入失败: " + e.getMessage());
         }
-        return Result.ok("已修改 " + a.path());
+        // ch16：diff 摘要（含 @@DIF 标记）替代一句话，供 Renderer 渲染红绿 diff
+        return Result.ok(DiffView.editSummary(a.path(), content, a.oldString(), a.newString()));
     }
 }

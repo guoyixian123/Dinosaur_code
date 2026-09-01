@@ -50,8 +50,18 @@ final class Sandbox {
     /**
      * 存在的目标 {@code toRealPath()}；不存在则取最近<b>已存在祖先</b>目录
      * {@code toRealPath()} 后拼回剩余段（覆盖新建文件与未创建中间目录）。
+     *
+     * <p>符号链接（含悬空链接）优先解引用一层再重走判定——{@code Files.exists(NOFOLLOW)}
+     * 对悬空链接返回 true 但 {@code toRealPath()} 抛异常，且不解析会让「父目录合法、
+     * 链接指向沙箱外」的逃逸漏判（N2）。递归有界：每次剥离一层链接。
      */
     static Path evalSymlinksOrAncestor(Path abs) throws IOException {
+        if (Files.isSymbolicLink(abs)) {
+            Path parent = abs.getParent().toRealPath();
+            Path target = Files.readSymbolicLink(abs);
+            Path deref = target.isAbsolute() ? target : parent.resolve(target);
+            return evalSymlinksOrAncestor(deref);
+        }
         if (Files.exists(abs)) {
             return abs.toRealPath();
         }

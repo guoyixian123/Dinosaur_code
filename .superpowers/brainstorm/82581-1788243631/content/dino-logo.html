@@ -1,0 +1,92 @@
+<h2>小恐龙 Logo 候选稿 —— 你喜欢哪只?</h2>
+<p class="subtitle">下面是 4 只呆萌风格的绿色小恐龙,用终端块字符拼成(即真实 TUI 里的样子)。点击选择你最喜欢的,或直接在终端告诉我。</p>
+
+<style>
+  .term {
+    background: #1a1b26;
+    color: #9ece6a;
+    font-family: "SF Mono", Menlo, Consolas, monospace;
+    font-size: 13px;
+    line-height: 1.15;
+    padding: 18px 24px;
+    border-radius: 8px;
+    white-space: pre;
+    display: inline-block;
+  }
+  .term .eye { color: #e0af68; }
+  .term .dim { color: #414868; }
+  .term .belly { color: #4fd6be; }
+  .term .darker { color: #5b7a4a; }
+  .term .white { color: #c0caf5; }
+</style>
+
+<div class="options">
+  <div class="option" data-choice="a" onclick="toggleSelect(this)">
+    <div class="letter">A</div>
+    <div class="content">
+      <h3>圆滚滚经典款</h3>
+      <p>大眼睛 + 短手手,侧身回眸看你的感觉。块字符层次最丰富,呆萌感最强。</p>
+      <div class="term">      ▄▄▄▄▄
+    ▄█████████▄
+   ████◉  ◉ ███
+  ██████    ▄███
+  ██████   ▄██▀
+  ██████▄▄███▀
+   ▀████▀▀
+    ▀▀ ▀▀  <span class="dim">— 大头小短手</span></div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="b" onclick="toggleSelect(this)">
+    <div class="letter">B</div>
+    <div class="content">
+      <h3>蛋壳出生款</h3>
+      <p>从蛋壳里探头的小恐龙,呼应「项目孵化」的隐喻,辨识度高、故事感强。</p>
+      <div class="term">   ▄▄▄▄▄▄▄▄
+  █▓▓▓▓▓▓▓▓▓█
+  ▓▓▓▓▄▄▄▓▓▓▓
+  █████◉ ◉███
+  ██████  ▄██
+  ▓▓████████▓▓
+  ▓▓▓▓▓▓▓▓▓▓▓▓
+   ▀▓▓▓▓▓▓▓▓▀
+    ▀▀▀▀▀▀▀▀ <span class="dim">— 破壳而出</span></div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="c" onclick="toggleSelect(this)">
+    <div class="letter">C</div>
+    <div class="content">
+      <h3>极简剪影款</h3>
+      <p>类似 Claude Code 小螃蟹的思路——单色剪影 + 一个表情点,最克制,任意终端都不会渲染歪。</p>
+      <div class="term">  ▄▄▄
+ ███████▄
+ ████████
+ ██<span class="white">◉</span>██████
+ █████████
+  ███████▄
+   ██████
+    ▀▀▀▀  <span class="dim">— 一笔画小恐龙</span></div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="d" onclick="toggleSelect(this)">
+    <div class="letter">D</div>
+    <div class="content">
+      <h3>歪头呆萌款</h3>
+      <p>脑袋歪向一边,配上「?」的眼神,搞怪指数最高,适合想突出「呆」的感觉。</p>
+      <div class="term">        ▄▄▄▄▄▄
+      ▄███████▀
+     ██████▄
+    ██<span class="eye">◉</span>  ◉██▄
+   █████▄  ▀
+   ███████▄
+    ▀███████▄
+     ▀▀▀▀▀▀▀  <span class="dim">— 歪头杀</span></div>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <p class="subtitle">💡 小恐龙会同时用在:启动 Banner、Spinner 等待动画、输入框左侧。选一只作为「标准形象」,其他场景做姿态变化(同一只恐龙的不同动作,保持形象统一)。</p>
+</div>

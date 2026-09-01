@@ -76,6 +76,8 @@ public final class Main {
                 .withTaskManager(taskManager)
                 .withAgentSpecs(agentSpecs);
         registry.register(agentTool);
+        // TaskStop：让模型/用户能停止后台子 Agent 任务（此前从未注册，后台任务无法取消）
+        registry.register(new dinocode.subagent.TaskStopTool(taskManager));
 
         // ch14：worktree 系统——管理器 + 会话级工具 + SubAgent 隔离 + 启动恢复 + 后台清理
         dinocode.worktree.WorktreeManager worktreeManager = new dinocode.worktree.WorktreeManager(
@@ -105,9 +107,12 @@ public final class Main {
         registry.register(new dinocode.teams.TeamTools.SendMessageTool(teamMgr, "lead"));
         agentTool.withTeamManager(teamMgr);
         dinocode.teams.TeammateRunner.SingleTurnRunner teamRunner =
-                (Object agent, Object conv, java.util.List<dinocode.core.Message> seed) ->
-                        subExecutor.run((dinocode.subagent.SubAgentSpec) agent, null,
-                                registry, seed);
+                (Object agent, Object conv, java.util.List<dinocode.core.Message> seed) -> {
+                    // agent 槽是队员的 SubAgentSpec（SpawnDispatcher 塞入）；工具集用
+                    // teammateTools（全量 + SendMessage），队员靠它与 Lead/队友沟通
+                    dinocode.subagent.SubAgentSpec spec = (dinocode.subagent.SubAgentSpec) agent;
+                    return subExecutor.run(spec, null, agentTool.teammateTools(), seed);
+                };
         agentTool.withTeammateRunner(teamRunner);
 
         // ch09 F13~F16：JSONL 会话存档写入器 + Session 回调挂接

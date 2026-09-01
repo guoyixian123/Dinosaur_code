@@ -215,7 +215,7 @@ public final class AgentTool implements Tool {
     }
 
     /** 队员工具集：在父 registry 复制基础上补 SendMessage（队员用它沟通，N5）。 */
-    private ToolRegistry teammateTools() {
+    public ToolRegistry teammateTools() {
         ToolRegistry tools = new ToolRegistry();
         for (Tool t : parentRegistry.toolsAll()) {
             try {

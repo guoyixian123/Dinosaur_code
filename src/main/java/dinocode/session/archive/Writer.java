@@ -94,10 +94,29 @@ public final class Writer implements Closeable {
 
     // ---------- Session 回调契约（ch09 F44）：吞掉 IO 异常（写入失败不中断对话，N5） ----------
 
-    /** Session.onAppend 回调入口。 */
+    /** 首条消息携带的 model 标签（/sessions 列表展示用）；由挂接方注入，可空。 */
+    private volatile String modelTag;
+
+    /** 注入首条消息的 model 标签（F11：会话列表展示模型名）。 */
+    public void withModelTag(String model) {
+        this.modelTag = model;
+    }
+
+    /** Session.onAppend 回调入口：首条消息携带 model 标签（修复前恒传 isFirst=false，列表 model 列恒空）。 */
     public void archiveAppend(Message msg) {
         try {
-            append(msg, null, false);
+            String model = null;
+            boolean isFirst;
+            lock.lock();
+            try {
+                isFirst = firstMessage;
+                if (isFirst) {
+                    model = modelTag;
+                }
+            } finally {
+                lock.unlock();
+            }
+            append(msg, model, isFirst);
         } catch (IOException e) {
             System.err.println("[session] warn: 存档写入失败: " + e.getMessage());
         }

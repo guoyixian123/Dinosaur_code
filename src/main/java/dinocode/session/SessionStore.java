@@ -36,11 +36,25 @@ public final class SessionStore {
         return new SessionStore(Path.of(System.getProperty("user.home"), ".dino", "sessions"));
     }
 
-    /** 存盘。目录不存在则创建（见 checklist §C）。失败抛 IOException，由调用方友好提示。 */
+    /**
+     * 存盘。目录不存在则创建（见 checklist §C）。失败抛 IOException，由调用方友好提示。
+     * 写临时文件 + 原子移动——写一半崩溃不会留下损坏的会话 JSON（对比 JSONL 存档
+     * 逐行 flush 的容忍策略，JSON 整文件覆盖写损坏即全丢，须原子）。
+     */
     public void save(Session session) throws IOException {
         Files.createDirectories(dir);
         Path target = dir.resolve(session.getId() + ".json");
-        Files.writeString(target, JSON.writeValueAsString(stripToolTurns(session)));
+        Path tmp = dir.resolve(session.getId() + ".json.tmp");
+        Files.writeString(tmp, JSON.writeValueAsString(stripToolTurns(session)));
+        try {
+            java.nio.file.Files.move(tmp, target,
+                    java.nio.file.StandardCopyOption.ATOMIC_MOVE,
+                    java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+        } catch (java.nio.file.AtomicMoveNotSupportedException e) {
+            // 个别文件系统不支持原子移动：降级为普通覆盖（仍优于半截写入）
+            java.nio.file.Files.move(tmp, target,
+                    java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+        }
     }
 
     /** 工具回合（TOOL 消息、带工具调用的 assistant 回合）不落盘（ch03 spec「退出即丢」）。 */

@@ -82,7 +82,9 @@ public final class GrepTool implements Tool {
 
         List<String> hits = new ArrayList<>();
         try (Stream<Path> walk = Files.walk(root)) {
-            Iterator<Path> it = walk.filter(Files::isRegularFile).iterator();
+            // NOFOLLOW：文件符号链接不作为 regular file 遍历，防止把沙箱外文件内容读进上下文
+            Iterator<Path> it = walk.filter(p -> Files.isRegularFile(p,
+                    java.nio.file.LinkOption.NOFOLLOW_LINKS)).iterator();
             while (it.hasNext() && hits.size() < MAX_RESULTS) {
                 Path p = it.next();
                 if (nameFilter != null && !nameFilter.matches(p.getFileName())) {

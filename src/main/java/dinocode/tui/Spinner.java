@@ -3,8 +3,8 @@ package dinocode.tui;
 import java.io.PrintWriter;
 
 /**
- * 首字到达前的等待指示：动画帧 + 🦖（checklist §H）。
- * 整行重绘，不参与光标编辑，因此可安全使用 emoji。
+ * 首字到达前的等待指示：动画帧 + 中文文案（ch16 视觉优化，全界面去 emoji）。
+ * 整行重绘，不参与光标编辑。
  */
 final class Spinner {
 
@@ -54,7 +54,7 @@ final class Spinner {
         int frame = 0;
         while (running) {
             synchronized (out) {
-                out.print("\r" + Ansi.GREEN + FRAMES[frame % FRAMES.length] + " 🦖 thinking…" + Ansi.RESET);
+                out.print("\r" + Ansi.GREEN + FRAMES[frame % FRAMES.length] + " 小龙思考中…" + Ansi.RESET);
                 out.flush();
             }
             frame++;

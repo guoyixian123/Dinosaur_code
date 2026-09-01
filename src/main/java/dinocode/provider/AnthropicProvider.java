@@ -56,6 +56,7 @@ public final class AnthropicProvider extends AbstractHttpProvider {
                 .header("Content-Type", "application/json")
                 .header("x-api-key", apiKey)
                 .header("anthropic-version", API_VERSION)
+                .timeout(REQUEST_TIMEOUT) // 覆盖到响应头+body 接收，防半开连接悬挂（ch13）
                 .POST(HttpRequest.BodyPublishers.ofString(JSON.writeValueAsString(body)))
                 .build();
     }
@@ -117,6 +118,14 @@ public final class AnthropicProvider extends AbstractHttpProvider {
         if (!messages.isEmpty()) {
             ObjectNode last = (ObjectNode) messages.get(messages.size() - 1);
             if ("user".equals(last.path("role").asText())) {
+                // toMessages 生成的普通 user 消息 content 是字符串（TextNode），
+                // 直接 withArray 会抛 UnsupportedOperationException——先升为数组
+                if (last.get("content") != null && last.get("content").isTextual()) {
+                    String text0 = last.get("content").asText();
+                    last.putArray("content").addObject()
+                            .put("type", "text")
+                            .put("text", text0);
+                }
                 ObjectNode text = last.withArray("content").addObject();
                 text.put("type", "text");
                 text.put("text", reminder);

@@ -134,23 +134,13 @@ public final class WorktreeManager {
             pb.directory(dir.toFile());
             pb.environment().put("GIT_TERMINAL_PROMPT", "0"); // F4：绝不挂起等输入
             pb.environment().put("GIT_ASKPASS", "");
-            Process process = pb.start();
-            if (!process.waitFor(GIT_TIMEOUT_SECONDS, java.util.concurrent.TimeUnit.SECONDS)) {
-                process.destroyForcibly();
+            // ProcessRunner 边读边等：git ls-files 等输出超 64KB 管道缓冲时不会挂满超时
+            dinocode.tool.ProcessRunner.Output out =
+                    dinocode.tool.ProcessRunner.run(pb, GIT_TIMEOUT_SECONDS);
+            if (out.timedOut() || out.exitCode() != 0) {
                 return null;
             }
-            if (process.exitValue() != 0) {
-                return null;
-            }
-            try (BufferedReader reader = new BufferedReader(
-                    new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
-                StringBuilder sb = new StringBuilder();
-                String line;
-                while ((line = reader.readLine()) != null) {
-                    sb.append(line).append('\n');
-                }
-                return sb.toString();
-            }
+            return out.stdout();
         } catch (IOException | InterruptedException e) {
             if (e instanceof InterruptedException ie) {
                 Thread.currentThread().interrupt();

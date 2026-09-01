@@ -10,7 +10,6 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
-import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -77,26 +76,18 @@ public final class HookExecutor {
 
     private ExecutionResult runShell(Action.Shell shell, HookRule.Payload payload,
                                      boolean blocking, Duration timeout) throws Exception {
-        Process process = new ProcessBuilder("sh", "-c", shell.command())
-                .redirectErrorStream(false)
-                .start();
-        // payload 序列化成单行 JSON 通过 stdin 传入（F17）
-        try (var out = process.getOutputStream()) {
-            out.write((payload.toSortedJson() + "\n").getBytes(StandardCharsets.UTF_8));
-            out.flush();
-        } catch (IOException ignored) {
-            // 命令提前退出（如 head）：写管道失败不影响判定
-        }
-        String stderr;
-        String stdout;
-        boolean finished = waitFor(process, timeout);
-        if (!finished) {
-            process.destroyForcibly();
+        ProcessBuilder pb = new ProcessBuilder("sh", "-c", shell.command())
+                .redirectErrorStream(false);
+        // F17 契约：payload 序列化成单行 JSON 通过 stdin 传入；
+        // ProcessRunner 边读边等——输出超管道缓冲的正常 hook 不再被误判超时
+        dinocode.tool.ProcessRunner.Output out = dinocode.tool.ProcessRunner.run(
+                pb, timeout.toSeconds(), payload.toSortedJson() + "\n");
+        if (out.timedOut()) {
             return ExecutionResult.failure(new IOException("hook 命令超时"));
         }
-        stderr = new String(process.getErrorStream().readAllBytes(), StandardCharsets.UTF_8).strip();
-        stdout = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8).strip();
-        int code = process.exitValue();
+        String stderr = out.stderr().strip();
+        String stdout = out.stdout().strip();
+        int code = out.exitCode();
 
         if (blocking && code == 2) { // F19：拦截命中
             String reason = !stderr.isEmpty() ? stderr : stdout;
@@ -107,10 +98,6 @@ public final class HookExecutor {
                     + (stderr.isEmpty() ? "" : ": " + firstLine(stderr))));
         }
         return ExecutionResult.empty(); // exit 0 放行
-    }
-
-    private static boolean waitFor(Process process, Duration timeout) throws InterruptedException {
-        return process.waitFor(timeout.toMillis(), TimeUnit.MILLISECONDS);
     }
 
     // ---------- http（F23~F25） ----------

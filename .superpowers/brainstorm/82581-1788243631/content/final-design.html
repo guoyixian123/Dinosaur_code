@@ -1,0 +1,80 @@
+<h2>最终设计稿 —— 四个需求的完整效果</h2>
+<p class="subtitle">综合所有决定:路线 A(ANSI 精修)· 全界面去 emoji · 输入框绿色边框+鳞片徽标 · 纯色 ❯。下面是启动画面和文件修改的最终效果,确认后我写设计文档。</p>
+
+<style>
+  .term {
+    background: #16181d;
+    color: #a9b1d6;
+    font-family: "SF Mono", Menlo, Consolas, monospace;
+    font-size: 12.5px;
+    line-height: 1.28;
+    padding: 16px 20px;
+    border-radius: 10px;
+    white-space: pre;
+    overflow-x: auto;
+  }
+  .term .grn { color:#7dd05e; }
+  .term .gbr { color:#9ece6a; font-weight:bold; }
+  .term .dim { color:#565f89; }
+  .term .red { color:#f7768e; }
+  .term .redbg { background:#4a2530; color:#f7768e; }
+  .term .grnbg { background:#274032; color:#9ece6a; }
+  .term .ylw { color:#e0af68; }
+  .term .blu { color:#7aa2f7; }
+  .term .cyn { color:#4fd6be; }
+  .term .wht { color:#c0caf5; }
+  .fig { color:#9ece6a; font-weight:bold; }
+  h4 { margin: 14px 0 4px; color:#7dd05e; }
+</style>
+
+<h4>① 启动画面(figlet 大字标 + 状态面板,无 emoji)</h4>
+<div class="term"><span class="fig">██████╗ ██╗ ███╗   ██╗ ██████╗  ██████╗ ██████╗ ██████╗ ███████╗</span>
+<span class="fig">██╔══██╗██║ ████╗  ██║██╔══██╗██╔════╝██╔═══██╗██╔══██╗██╔════╝</span>
+<span class="fig">██║  ██║██║ ██╔██╗ ██║██║  ██║██║     ██║   ██║██║  ██║█████╗  </span>
+<span class="fig">██████╔╝██║ ██║╚██╗██║██║  ██║██║     ██║   ██║██║  ██║██╔══╝  </span>
+<span class="fig">██╔══██╗██║ ██║ ╚████║██████╔╝╚██████╗╚██████╔╝██████╔╝███████╗</span>
+<span class="fig">╚═╝  ╚═╝╚═╝ ╚═╝  ╚═══╝╚═════╝  ╚═════╝  ╚═════╝ ╚═════╝ ╚══════╝</span>
+
+<span class="cyn">╭─────────────────────────────────────────────╮</span>
+<span class="cyn">│</span> <span class="dim">模型</span> <span class="wht">glm-4.7</span>  <span class="dim">会话</span> <span class="wht">新会话</span>  <span class="dim">模式</span> <span class="ylw">DEFAULT</span> <span class="cyn">│</span>
+<span class="cyn">╰─────────────────────────────────────────────╯</span>
+<span class="dim">  Shift+Tab 切换模式 · Tab 补全命令 · /help 帮助</span></div>
+
+<h4>② 文件修改可视化(Edit/Write 显示红绿 diff)</h4>
+<div class="term"><span class="grn">● </span><span class="wht">Edit</span> <span class="dim">src/tui/Banner.java</span>
+<span class="dim">  ⎿ </span><span class="grn">+2</span> <span class="red">−1</span> <span class="dim">已应用</span>
+<span class="dim">  ⎿</span>    <span class="blu">13</span> <span class="dim">│</span>   <span class="dim">private static final String DINO =</span>
+<span class="dim">  ⎿</span> <span class="redbg">− 13</span> <span class="dim">│</span> <span class="red">    " ▄▄  ▄▄\n" +</span>
+<span class="dim">  ⎿</span> <span class="grnbg">+ 13</span> <span class="dim">│</span> <span class="grn">    "  ▄▄▄▄▄  ▄▄▄▄▄\n" +</span>
+<span class="dim">  ⎿</span>    <span class="blu">14</span> <span class="dim">│</span>   <span class="dim">"( o  o )\n" +</span>
+
+<span class="grn">● </span><span class="wht">Write</span> <span class="dim">docs/notes.md</span> <span class="cyn">(新文件)</span>
+<span class="dim">  ⎿ </span><span class="grn">+24</span> <span class="dim">行 · 新建</span></div>
+
+<h4>③ 输入框(绿色边框 + 鳞片纹样徽标,无 emoji)</h4>
+<div class="term"><span class="grn">╭</span><span class="grn">▄▀▄▄▀▄</span><span class="grn">────────────────────────────────────╮</span>
+<span class="grn">│</span> <span class="gbr">❯</span> <span class="wht">帮我优化 Banner 的恐龙画</span><span class="grn">▌</span>                <span class="grn">│</span>
+<span class="grn">╰─────────────────────────────────────────────╯</span>
+<span class="dim">  DEFAULT · glm-4.7 · ↑12,345 ↓3,421 tokens</span>
+
+<span class="dim">── 模式徽标示例(PLAN / BYPASS)──────────</span>
+<span class="ylw">╭▄▀▄▄▀▄──────────────────────────────────────╮</span>
+<span class="ylw">│</span> <span class="gbr">❯ [PLAN]</span> <span class="wht">先分析再计划…▌</span>                     <span class="ylw">│</span>
+<span class="ylw">╰─────────────────────────────────────────────╯</span></div>
+
+<h4>④ Spinner 与退出(块字符恐龙替代 🦖)</h4>
+<div class="term"><span class="grn">⠋ </span><span class="dim">小龙思考中…</span>
+<span class="grn">⠹ </span><span class="dim">小龙思考中…  (恐龙帧:</span><span class="grn"> ▹ Stocks▄▀▙ ▹</span><span class="dim"> 备选,待你定夺)</span>
+
+<span class="dim">退出时:</span>
+<span class="dim">再见。</span></div>
+
+<div class="section">
+  <h4>实现要点(供设计文档)</h4>
+  <ul>
+    <li><b>Diff 渲染</b>:新增 <code>tui/DiffView.java</code>;Edit/Write 工具把 diff 摘要写入 ToolResult 内容前缀(机器可读标记),Renderer 解析后彩色渲染</li>
+    <li><b>输入框边框</b>:JLine 限制下只画上边框+行体+下边框(下边框在回显后由 Tui 在 readLine 前后配合 ANSI 定位实现,降级安全)</li>
+    <li><b>所有 emoji 清零</b>:Banner/Spinner/Tui 退出语/UiView,统一块字符与中文文案</li>
+    <li><b>风险控制</b>:所有新渲染降级安全——窄终端(<60列)自动退回旧版简单输出</li>
+  </ul>
+</div>

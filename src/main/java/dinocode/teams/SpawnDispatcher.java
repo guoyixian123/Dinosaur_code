@@ -1,5 +1,7 @@
 package dinocode.teams;
 
+import java.util.List;
+
 /**
  * 队员启动统一入口（ch15 F6~F8/T7~T8）：按 TeamMode 分发 in-process / tmux。
  */
@@ -30,7 +32,11 @@ public final class SpawnDispatcher {
         String memberName = config.memberName();
         switch (team.mode()) {
             case IN_PROCESS -> {
-                TeamManager.Member member = new TeamManager.Member(memberName, new Object(), new Object());
+                // agent 槽放队员的 SubAgentSpec（Main 的 runner 据此构造子 Agent）
+                dinocode.subagent.SubAgentSpec spec =
+                        new dinocode.subagent.SubAgentSpec(
+                                memberName, "团队队员", List.of(), List.of(), null, 200, "");
+                TeamManager.Member member = new TeamManager.Member(memberName, spec, null);
                 team.addMember(member);
                 member.active = true;
                 Thread.startVirtualThread(() -> TeammateRunner.runInProcessTeammate(

@@ -62,6 +62,12 @@ public final class WriteFileTool implements Tool {
             return Result.error("缺少参数 content");
         }
         Path p = Path.of(a.path());
+        String oldContent;
+        try {
+            oldContent = Files.exists(p) ? Files.readString(p) : null;
+        } catch (IOException e) {
+            oldContent = null; // 读不到旧内容按新建处理，不让摘要阻塞写入
+        }
         try {
             if (p.getParent() != null) {
                 Files.createDirectories(p.getParent());
@@ -71,6 +77,7 @@ public final class WriteFileTool implements Tool {
             return Result.error("写入失败: " + e.getMessage());
         }
         int bytes = a.content().getBytes(StandardCharsets.UTF_8).length;
-        return Result.ok("已写入 " + a.path() + "（" + bytes + " 字节）");
+        // ch16：diff 摘要（含 @@DIF 标记）替代一句话，供 Renderer 渲染红绿 diff
+        return Result.ok(DiffView.writeSummary(a.path(), oldContent, a.content(), bytes));
     }
 }

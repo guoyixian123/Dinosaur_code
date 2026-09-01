@@ -142,6 +142,15 @@ public final class TeamManager {
                     m.thread.interrupt();
                 }
             }
+            // 外部后端（tmux）队员的窗口/进程清理（修复前只 interrupt in-process 线程，
+            // tmux 窗口和队员 CLI 进程照跑——stopTmuxTeammate 写了没人调）
+            if (mode == TeamMode.TMUX) {
+                for (Member m : members.values()) {
+                    if (m.thread == null) {
+                        dinocode.teams.TmuxBackend.stopTmuxTeammate(name, m.name);
+                    }
+                }
+            }
         }
 
         public synchronized Member getMember(String memberName) {

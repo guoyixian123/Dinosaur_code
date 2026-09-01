@@ -50,6 +50,8 @@ abstract class AbstractHttpProvider implements ChatProvider {
         // 连接被远端中途关闭（closed/reset）时自动重试一次——服务端瞬时断流，重试常能恢复
         for (int attempt = 0; attempt < 2; attempt++) {
             try {
+                // REQUEST_TIMEOUT 覆盖到响应头 + body 接收（HttpClient 语义），
+                // 防服务端停发但不断开（半开连接）时 readLine 无限期悬挂
                 HttpResponse<InputStream> response = HTTP.send(httpRequest, HttpResponse.BodyHandlers.ofInputStream());
                 int status = response.statusCode();
                 if (status < 200 || status >= 300) {
@@ -59,8 +61,10 @@ abstract class AbstractHttpProvider implements ChatProvider {
                 return streamFrom(response.body());
             } catch (IOException e) {
                 String msg = String.valueOf(e.getMessage());
-                boolean transientClose = msg.contains("closed") || msg.contains("reset")
-                        || msg.contains("connection was not established");
+                // HttpTimeoutException 属于请求超时（非瞬时断流），不重试直接报网络异常
+                boolean transientClose = !(e instanceof java.net.http.HttpTimeoutException)
+                        && (msg.contains("closed") || msg.contains("reset")
+                        || msg.contains("connection was not established"));
                 if (attempt == 0 && transientClose) {
                     continue; // 重试一次
                 }

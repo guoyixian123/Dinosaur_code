@@ -65,6 +65,27 @@ class SandboxTest {
     }
 
     @Test
+    void deniesDanglingSymlinkPointingOutside() throws IOException {
+        // 悬空符号链接（目标不存在）：evalSymlinksOrAncestor 走祖先回退分支，
+        // 修复前尾段不解析 → 判定放行 → 写入跟随链接逃逸（P1 修复回归用例）
+        Path resolved = Sandbox.resolveRoot(root);
+        Path outside = Files.createTempDirectory("dino-outside2");
+        Files.createSymbolicLink(root.resolve("dangling-link"), outside.resolve("newfile.txt"));
+
+        assertFalse(Sandbox.ok(resolved, "dangling-link"),
+                "悬空链接指向项目外应被拒");
+    }
+
+    @Test
+    void allowsDanglingSymlinkInsideRoot() throws IOException {
+        // 悬空链接但目标在项目内：正常放行（新建文件场景）
+        Path resolved = Sandbox.resolveRoot(root);
+        Files.createSymbolicLink(root.resolve("dangling-ok"), root.resolve("future.txt"));
+
+        assertTrue(Sandbox.ok(resolved, "dangling-ok"), "指向项目内的悬空链接放行");
+    }
+
+    @Test
     void prefixComparisonIsSegmentBased() {
         // Path.startsWith 按段比对：<root>ab 不应命中 <root>/a 前缀
         Path a = Path.of("/data/proj");

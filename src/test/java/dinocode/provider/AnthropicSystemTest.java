@@ -116,4 +116,26 @@ class AnthropicSystemTest {
         assertEquals("user", messages.get(0).path("role").asText());
         assertEquals("你好", messages.get(0).path("content").asText());
     }
+
+    @Test
+    void reminderOnPlainTextUserTailUpgradesStringContentToArray() throws Exception {
+        // 修复回归：PLAN 模式首轮——末条是字符串 content 的 user 消息（真实最高频形态）。
+        // 修复前直接 withArray 抛 UnsupportedOperationException，用户看到「错误: null」。
+        ChatRequest req = new ChatRequest(
+                List.of(Message.user("帮我重构这个模块")),
+                4096, List.of(), "稳定", "", "PLAN REMINDER");
+
+        Method m = AnthropicProvider.class.getDeclaredMethod("toMessages", List.class, String.class);
+        m.setAccessible(true);
+        JsonNode messages = JSON.readTree(m.invoke(null, req.history(), req.reminder()).toString());
+
+        assertEquals(1, messages.size(), "不应新起消息，应并入末条 user");
+        JsonNode last = messages.get(0);
+        assertEquals("user", last.path("role").asText());
+        assertTrue(last.path("content").isArray(), "字符串 content 应被升为数组");
+        assertEquals(2, last.path("content").size());
+        assertEquals("text", last.path("content").get(0).path("type").asText());
+        assertEquals("帮我重构这个模块", last.path("content").get(0).path("text").asText());
+        assertEquals("PLAN REMINDER", last.path("content").get(1).path("text").asText());
+    }
 }

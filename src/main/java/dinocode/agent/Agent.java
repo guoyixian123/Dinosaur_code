@@ -24,6 +24,7 @@ import dinocode.prompt.Environment;
 import dinocode.prompt.Prompt;
 import dinocode.prompt.Reminder;
 import dinocode.tool.Result;
+import dinocode.tool.Tool;
 import dinocode.tool.ToolRegistry;
 
 import java.io.IOException;
@@ -151,6 +152,13 @@ public final class Agent {
      */
     public TurnStream run(List<Message> history, int maxTokens, Mode mode, CancelToken cancel) {
         this.currentModeName = mode == null ? "default" : mode.displayName(); // ch12 payload 通用字段
+        // fork 上下文（ch13 F7 补全）：把当前对话暴露给注册在本 registry 的 AgentTool，
+        // 否则 parentConversation 恒 null，fork 分支在生产环境永远报 "requires parent conversation"
+        for (Tool t : registry.toolsAll()) {
+            if (t instanceof dinocode.subagent.AgentTool at) {
+                at.withParentConversation(history);
+            }
+        }
         List<ToolDefinition> defs = mode == Mode.PLAN
                 ? registry.readOnlyDefinitions()
                 : registry.definitions();
@@ -293,6 +301,10 @@ public final class Agent {
 
             // 无工具调用：纯文本即最终答复（自然完成，F2-1）
             if (out.calls().isEmpty()) {
+                // 取消中断的半截输出不当最终答复：不入 history、不触发记忆/Stop hook（与 finishCancelled 同一收尾）
+                if (out.failed()) {
+                    return finishCancelled(history, queue);
+                }
                 history.add(Message.assistant(ensureFinal(out.text())));
                 triggerMemoryUpdate(history); // ch09 F35：本轮结束，条件满足时异步提取笔记
                 // ch12 F9：Stop 事件（自然停止；取消/出错路径不触发）
@@ -826,11 +838,11 @@ public final class Agent {
                 : ToolRegistry.DEFAULT_TIMEOUT;
     }
 
-    /** 单工具执行：30s 超时兜底（N1）。 */
+    /** 单工具执行：按工具取超时（Agent 工具 10 分钟，其余 30s，见 timeoutFor）。 */
     private ToolResult executeTool(ToolCall call, CancelToken toolToken) {
         Future<Result> future = EXECUTOR.submit(() -> registry.execute(call.name(), parseArgs(call.arguments())));
         try {
-            Result r = future.get(ToolRegistry.DEFAULT_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+            Result r = future.get(timeoutFor(call.name()).toMillis(), TimeUnit.MILLISECONDS);
             return toolToken.isCancelled()
                     ? new ToolResult(call.id(), AgentConstants.NOTICE_CANCELLED, true)
                     : new ToolResult(call.id(), r.content(), r.isError());

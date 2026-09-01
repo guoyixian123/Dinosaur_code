@@ -141,10 +141,11 @@ public final class Memory {
         }
 
         private void updateNote(UpdateAction a) throws IOException {
-            if (a.filename() == null || a.filename().isBlank()) {
+            String filename = safeFilename(a.filename());
+            if (filename == null) {
                 return;
             }
-            Path file = dir.resolve(a.filename());
+            Path file = dir.resolve(filename);
             if (!Files.isRegularFile(file)) {
                 return;
             }
@@ -157,15 +158,34 @@ public final class Memory {
             Files.writeString(file, body, StandardCharsets.UTF_8,
                     StandardOpenOption.CREATE, StandardOpenOption.WRITE, StandardOpenOption.TRUNCATE_EXISTING);
             // 索引行按 filename 匹配替换
-            replaceIndexLine(a.filename(), "- [" + type + "] " + safe(a.title()) + " — " + a.filename());
+            replaceIndexLine(filename, "- [" + type + "] " + safe(a.title()) + " — " + filename);
         }
 
         private void deleteNote(UpdateAction a) throws IOException {
-            if (a.filename() == null || a.filename().isBlank()) {
+            String filename = safeFilename(a.filename());
+            if (filename == null) {
                 return;
             }
-            Files.deleteIfExists(dir.resolve(a.filename()));
-            removeIndexLine(a.filename());
+            Files.deleteIfExists(dir.resolve(filename));
+            removeIndexLine(filename);
+        }
+
+        /**
+         * filename 来自 LLM 输出，必须消毒后才能 resolve——含路径分隔符/.. /绝对路径
+         * 时返回 null（拒绝操作），防止目录穿越删写沙箱外文件（与 createNote 的
+         * sanitizeSlug 同一防御思想）。
+         */
+        private static String safeFilename(String filename) {
+            if (filename == null || filename.isBlank()) {
+                return null;
+            }
+            String f = filename.strip();
+            if (f.contains("/") || f.contains("\\") || f.contains("..")
+                    || Path.of(f).isAbsolute()) {
+                LOG.warning("[memory] 拒绝非文件名形式的 filename: " + f);
+                return null;
+            }
+            return f;
         }
 
         private void appendIndex(String line) throws IOException {

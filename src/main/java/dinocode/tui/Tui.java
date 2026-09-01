@@ -211,6 +211,10 @@ public final class Tui {
         this.instructionText = instructionText == null ? "" : instructionText;
         this.memoryText = memoryText == null ? "" : memoryText;
         this.workspace = workspace;
+        // 会话列表 model 列数据源（F11）：首条存档消息携带
+        if (writer != null) {
+            writer.withModelTag(provider.model());
+        }
         return this;
     }
 
@@ -250,7 +254,7 @@ public final class Tui {
                     }));
 
             Banner.print(terminal.writer(), config,
-                    restored ? "已恢复上次会话 " + session.getId() : "新会话");
+                    restored ? "已恢复上次会话 " + session.getId() : "新会话", safeWidth());
             renderer.notice("提示: Shift+Tab 切换权限模式，Tab 补全斜杠命令，/help 查看全部命令");
 
             // ch12 F9：SessionStart 事件（env 装配完毕、首条 user 消息进入之前）
@@ -289,6 +293,7 @@ public final class Tui {
 
     private void loop() {
         while (true) {
+            printInputTopBorder();
             String line;
             try {
                 line = reader.readLine(prompt());
@@ -317,14 +322,66 @@ public final class Tui {
         }
     }
 
-    /** 提示符：权限模式徽标（ch06 F7）。 */
+    /** 提示符（Claude Code 风格）：细横线分隔 + 模式色 ❯ + 模式徽标（ch06 F7 + ch16）。 */
     private String prompt() {
+        return modeColor() + "❯ " + modeBadge() + Ansi.RESET;
+    }
+
+    private String modeColor() {
         return switch (mode) {
-            case PLAN -> Ansi.GREEN + "❯ [PLAN] " + Ansi.RESET;
-            case ACCEPT_EDITS -> Ansi.GREEN + "❯ [ACCEPT EDITS] " + Ansi.RESET;
-            case BYPASS -> Ansi.RED + "❯ [BYPASS] " + Ansi.RESET;
-            case DEFAULT -> Ansi.GREEN + "❯ " + Ansi.RESET;
+            case PLAN -> Ansi.YELLOW;
+            case BYPASS -> Ansi.RED;
+            default -> Ansi.GREEN;
         };
+    }
+
+    private String modeBadge() {
+        return switch (mode) {
+            case PLAN -> "[PLAN] ";
+            case ACCEPT_EDITS -> "[ACCEPT EDITS] ";
+            case BYPASS -> "[BYPASS] ";
+            case DEFAULT -> "";
+        };
+    }
+
+    /** ch16：终端宽度（取不到时返回 -1，各处按降级处理）。 */
+    private int safeWidth() {
+        try {
+            return terminal.getWidth();
+        } catch (RuntimeException e) {
+            return -1;
+        }
+    }
+
+    /**
+     * ch16：输入区上分隔线（Claude Code 风格）——暗色细横线，左端鳞片纹样 ▄▀▄▄▀▄。
+     * 每轮都画一条，代替方框：视觉上是"输入区从此开始"，不堆框。
+     * 窄终端（<30 列）或宽度未知时跳过。
+     */
+    private void printInputTopBorder() {
+        int width = safeWidth();
+        if (width < 30) {
+            return;
+        }
+        int inner = Math.min(width - 2, 60) - 8; // 减去徽标 6 字符与边距
+        out(modeColor() + "▄▀▄▄▀▄" + Ansi.DIM + "─".repeat(Math.max(4, inner)) + Ansi.RESET);
+    }
+
+    /**
+     * ch16：回合结束状态行（模式 · 模型 · 累计 tokens），DIM 弱化。
+     */
+    private void printInputBottomBorder() {
+        renderer.notice("  " + mode.displayName() + " · " + provider.model()
+                + " · ↑" + thousand(usageIn) + " ↓" + thousand(usageOut) + " tokens");
+    }
+
+    private static String thousand(long n) {
+        return String.format("%,d", n);
+    }
+
+    private void out(String s) {
+        terminal.writer().println(s);
+        terminal.writer().flush();
     }
 
     /** Shift+Tab（终端发送 ESC[Z）→ /mode 宏（独立方法避免源码内嵌控制字符）。 */
@@ -537,7 +594,7 @@ public final class Tui {
             tui.ensureSessionAgent();
             tui.sessionAgent.dispatchSessionHook(dinocode.hook.Event.SESSION_END, tui.sessionId(), Map.of());
             // N12：先取消进行中的回合再请求退出
-            tui.renderer.notice("再见 🦖");
+            tui.renderer.notice("再见。");
             tui.saveSessionQuietly();
             CancelToken cancel = tui.turnCancel;
             if (cancel != null) {
@@ -807,6 +864,7 @@ public final class Tui {
         if (interrupted) {
             renderer.notice("· 已中断");
         }
+        printInputBottomBorder(); // ch16：回合结束补下边框 + 状态行
         session.setLastActive(System.currentTimeMillis());
         saveSessionQuietly();
     }
@@ -821,10 +879,19 @@ public final class Tui {
         out.println();
         out.println(Ansi.YELLOW + "● " + request.name() + "(" + request.args() + ")" + Ansi.RESET);
         out.println(Ansi.DIM + "  " + request.reason() + Ansi.RESET);
-        out.println("是否继续?  [1] 允许本次  [2] 永久允许（写入本地配置）  [3] 拒绝本次");
-        out.println(Ansi.DIM + "  数字键选择，Esc 取消" + Ansi.RESET);
+        out.println(Ansi.GREEN + "是否继续?  [1] 允许本次  [2] 永久允许  [3] 拒绝本次"
+                + Ansi.DIM + "  · 数字键选择，Esc 取消" + Ansi.RESET);
         out.flush();
 
+        // ch16 修复：readLine 之外直接读键时终端仍处 canonical 模式，read() 要等回车才返回
+        // （表现为按 1 后菜单挂死到网络超时）——读键前手动进 raw，读完恢复
+        org.jline.terminal.Attributes savedAttrs = null;
+        try {
+            savedAttrs = terminal.getAttributes(); // enterRawMode 覆盖前保存
+            terminal.enterRawMode();
+        } catch (RuntimeException ignored) {
+            // 切换失败保持原模式：回车仍可确认
+        }
         try {
             while (pendingApproval != null) {
                 int ch = terminal.reader().read();
@@ -841,6 +908,8 @@ public final class Tui {
             }
         } catch (IOException e) {
             submitOutcome(Outcome.DENY_ONCE); // 读输入失败：兜底拒绝，解阻塞
+        } finally {
+            terminal.setAttributes(savedAttrs); // 恢复终端模式，JLine 后续 readLine 依赖
         }
     }
 

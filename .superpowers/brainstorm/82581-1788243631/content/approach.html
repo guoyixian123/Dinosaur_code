@@ -1,0 +1,105 @@
+<h2>路线决策:精修 ANSI vs 全屏 TUI 库</h2>
+<p class="subtitle">两条路线的终端效果图如下(左 = 保持现在的流式模型,只换"美术";右 = 引入 Lanterna 全屏接管)。点击选择路线。</p>
+
+<style>
+  .term {
+    background: #16181d;
+    color: #a9b1d6;
+    font-family: "SF Mono", Menlo, Consolas, monospace;
+    font-size: 12.5px;
+    line-height: 1.25;
+    padding: 16px 20px;
+    border-radius: 10px;
+    white-space: pre;
+    overflow-x: auto;
+  }
+  .term .grn { color:#7dd05e; }
+  .term .gbr { color:#9ece6a; font-weight:bold; }
+  .term .dim { color:#565f89; }
+  .term .red { color:#f7768e; }
+  .term .redbg { background:#5b2333; color:#f7768e; }
+  .term .grnbg { background:#28402a; color:#9ece6a; }
+  .term .ylw { color:#e0af68; }
+  .term .blu { color:#7aa2f7; }
+  .term .cyn { color:#4fd6be; }
+  .term .wht { color:#c0caf5; }
+  .fig { color:#7dd05e; font-weight:bold; }
+  h4 { margin: 14px 0 4px; }
+</style>
+
+<div class="options">
+
+  <div class="option" data-choice="ansi" onclick="toggleSelect(this)">
+    <div class="letter">A</div>
+    <div class="content">
+      <h3>路线 A:保持流式终端,ANSI 精修(Claude Code 同款思路)</h3>
+      <p>不换交互模型。用 figlet 字体 Banner + 面板边框 + 彩色 diff + 恐龙输入行,把"美术指导"补上。零架构风险,4 个需求全覆盖。</p>
+
+      <div class="term"><span class="dim">┌─ 启动画面 ─────────────────────────────────────────────┐</span>
+
+<span class="fig">██████╗ ██╗ ███╗   ██╗ ██████╗</span>
+<span class="fig">██╔══██╗██║ ████╗  ██║██╔══██╗</span>
+<span class="fig">██║  ██║██║ ██╔██╗ ██║██║  ██║</span>
+<span class="fig">██████╔╝██║ ██║╚██╗██║██║  ██║</span>
+<span class="fig">╚═════╝ ╚═╝ ╚═╝  ╚═══╝ ╚═════╝</span>
+<span class="grn">            🦖 </span><span class="gbr">Dino Code</span><span class="dim"> v0.1 · 你的终端编程小龙</span>
+
+<span class="cyn">╭───────────────────────────────────────────╮</span>
+<span class="cyn">│</span> <span class="dim">模型</span> <span class="wht">glm-4.7</span>   <span class="dim">会话</span> <span class="wht">new</span>   <span class="dim">模式</span> <span class="ylw">PLAN</span>      <span class="cyn">│</span>
+<span class="cyn">╰───────────────────────────────────────────╯</span>
+<span class="dim">  Shift+Tab 切换模式 · Tab 补全 · /help 帮助</span>
+
+<span class="dim">─────── 以下是使用中的效果 ─────────────</span>
+
+<span class="grn">● </span><span class="wht">Edit</span> <span class="dim">src/tui/Banner.java</span>
+<span class="dim">  ⎿ </span><span class="grn">+2</span> <span class="red">−1</span> <span class="dim">行变更</span>
+<span class="dim">  ⎿</span>   <span class="blu">12</span>   <span class="dim">private static final String DINO =</span>
+<span class="dim">  ⎿</span> <span class="redbg">− 13    " ▄▄  ▄▄\n" +</span>
+<span class="dim">  ⎿</span> <span class="grnbg">+ 13    "  ▄▄▄▄▄  ▄▄▄▄▄\n" +</span>
+<span class="dim">  ⎿</span>   <span class="blu">14</span>   <span class="dim">"( o  o )\n" +</span>
+
+<span class="cyn">╭─ 🦖 ──────────────────────────────────────╮</span>
+<span class="cyn">│</span> <span class="gbr">❯</span> <span class="wht">帮我优化 Banner 的恐龙画</span><span class="grn">▌</span>              <span class="cyn">│</span>
+<span class="cyn">╰───────────────────────────────────────────╯</span>
+<span class="dim">  PLAN · glm-4.7 · ↑12k ↓3.4k tokens</span></div>
+
+      <h4>代价</h4>
+      <p class="subtitle">输入框的"下边框"是画不出来的——JLine 在行内编辑,只能画上边框+恐龙提示符(如上图,效果已接近)。真·全包边框需要路线 B。</p>
+    </div>
+  </div>
+
+  <div class="option" data-choice="lanterna" onclick="toggleSelect(this)">
+    <div class="letter">B</div>
+    <div class="content">
+      <h3>路线 B:引入 Lanterna,全屏 TUI 重写</h3>
+      <p>终端完全接管,变成"图形化"布局:固定分区、真·边框输入框、可滚动消息面板、还能加鼠标支持。2025 年恢复活跃(3.1.4 / 3.2.0-alpha)。</p>
+
+      <div class="term"><span class="dim">╔═══════════════════════════════════════════════════════════╗</span>
+<span class="dim">║</span> <span class="grn">🦖 Dino Code v0.1</span>  <span class="dim">glm-4.7 · PLAN · ↑12k ↓3.4k</span>            <span class="dim">║</span>
+<span class="dim">╠═══════════════════════════════════════╦═══════════════════╣</span>
+<span class="dim">║</span> <span class="cyn">消息流(可滚动面板)</span>                   <span class="dim">║</span> <span class="cyn">侧栏</span>             <span class="dim">║</span>
+<span class="dim">║</span>                                       <span class="dim">║</span>  模式: PLAN      <span class="dim">║</span>
+<span class="dim">║</span> <span class="grn">● Edit Banner.java</span>                    <span class="dim">║</span>  工具: 12 个      <span class="dim">║</span>
+<span class="dim">║</span> <span class="redbg">− " ▄▄  ▄▄\n"      </span>                    <span class="dim">║</span>  技能: 3 个      <span class="dim">║</span>
+<span class="dim">║</span> <span class="grnbg">+ "  ▄▄▄▄▄  ▄▄▄▄▄\n"</span>                   <span class="dim">║</span>  任务: 2 后台     <span class="dim">║</span>
+<span class="dim">║</span>                                       <span class="dim">║</span>  会话: 4 条历史   <span class="dim">║</span>
+<span class="dim">║</span> <span class="dim">… AI 回复在此面板内滚动 …</span>              <span class="dim">║</span>                   <span class="dim">║</span>
+<span class="dim">╠═══════════════════════════════════════╩═══════════════════╣</span>
+<span class="dim">║</span> <span class="gbr">❯</span> <span class="wht">帮我优化 Banner 的恐龙画▌</span>                                <span class="dim">║</span>
+<span class="dim">╚═══════════════════════════════════════════════════════════╝</span></div>
+
+      <h4>代价(必须了解)</h4>
+      <p class="subtitle">
+        ① <b>Tui.java 全部重写</b>,流式 Agent 输出要接入自绘滚动面板——这是全项目最大的一次重构<br>
+        ② 终端原生滚动/复制/搜索全部失效,AI 长回复要靠它自己的滚动面板阅读,体验反而退步<br>
+        ③ Spinner/人在回路批准/会话存档等 15 章积累的交互逻辑都要重新适配<br>
+        ④ 收益主要是"真边框"和侧栏——对编程助手来说,信息密度未必比 A 高
+      </p>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h4>我的推荐:路线 A</h4>
+  <p class="subtitle">Claude Code 本身就是流式终端 + ANSI 精修,不是全屏 TUI——编程助手的主体是「读长回复」,保持终端原生滚动/复制是刚需。路线 A 用 1/10 的工作量拿到 90% 的颜值提升;哪天你真想要侧栏面板,再评估 B 不迟。</p>
+</div>

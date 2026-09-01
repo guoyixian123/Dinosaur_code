@@ -45,6 +45,7 @@ public final class OpenAiProvider extends AbstractHttpProvider {
         return HttpRequest.newBuilder(uri("/chat/completions"))
                 .header("Content-Type", "application/json")
                 .header("Authorization", "Bearer " + apiKey)
+                .timeout(REQUEST_TIMEOUT) // 覆盖到响应头+body 接收，防半开连接悬挂（ch13）
                 .POST(HttpRequest.BodyPublishers.ofString(JSON.writeValueAsString(body)))
                 .build();
     }
@@ -171,6 +172,15 @@ public final class OpenAiProvider extends AbstractHttpProvider {
                 root = JSON.readTree(data);
             } catch (JsonProcessingException e) {
                 return null;
+            }
+            // 部分兼容端点（中转网关/vLLM 等）在 HTTP 200 的流内下发 error 对象——
+            // 不处理会静默走到 EOF 被误报成"连接被中断"，掩盖真实的鉴权/配额错误
+            if (root.has("error")) {
+                JsonNode err = root.path("error");
+                String type = err.path("type").isTextual() ? err.path("type").asText() : "";
+                String message = err.path("message").isTextual()
+                        ? err.path("message").asText() : err.toString();
+                return List.of(ApiErrors.fromStreamError(type, message));
             }
             JsonNode usageNode = root.path("usage");
             if (usageNode.isObject() && usageNode.has("prompt_tokens")) {

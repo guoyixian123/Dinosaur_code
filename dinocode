@@ -1,12 +1,11 @@
 #!/bin/sh
 # Dino Code 启动脚本。
 # 先执行 `mvn package` 生成 target/dinocode.jar。
-# 若运行时 JVM（Java 24+）打印 native access 警告，可设：
-#   export DINO_JAVA_OPTS="--enable-native-access=ALL-UNNAMED"
 DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 JAR="$DIR/target/dinocode.jar"
 if [ ! -f "$JAR" ]; then
     echo "未找到 $JAR，请先运行: mvn package" >&2
     exit 1
 fi
-exec java $DINO_JAVA_OPTS -jar "$JAR" "$@"
+# JLine 加载 native 库需要 native access；缺省开启，Java 24+ 不再打 WARNING
+exec java --enable-native-access=ALL-UNNAMED ${DINO_JAVA_OPTS} -jar "$JAR" "$@"

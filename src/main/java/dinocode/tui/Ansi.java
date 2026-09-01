@@ -13,6 +13,7 @@ final class Ansi {
     static final String GREEN = ESC + "[32m";
     static final String RED = ESC + "[31m";
     static final String YELLOW = ESC + "[33m";
+    static final String BLUE = ESC + "[34m";
 
     /** 回车并清空当前行（用于清除等待指示器）。 */
     static final String CLEAR_LINE = "\r" + ESC + "[2K";
