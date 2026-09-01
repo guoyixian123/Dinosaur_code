@@ -302,12 +302,14 @@ public final class Tui {
                     saveSessionQuietly();
                     return; // 输入行为空：退出
                 }
+                printInputBottomBorder(); // 中断也要闭合输入区
                 continue; // 输入行非空：清空当前行，继续等待输入
             } catch (EndOfFileException e) {
                 saveSessionQuietly();
                 return; // Ctrl+D
             }
 
+            printInputBottomBorder(); // 提交即闭合：框只包住输入行（spec §3.3）
             String input = line.strip();
             if (input.isEmpty()) {
                 continue;
@@ -354,8 +356,8 @@ public final class Tui {
     }
 
     /**
-     * ch16：输入区上分隔线（Claude Code 风格）——暗色细横线，左端鳞片纹样 ▄▀▄▄▀▄。
-     * 每轮都画一条，代替方框：视觉上是"输入区从此开始"，不堆框。
+     * ch16：输入区上边线——左端鳞片纹样 ▄▀▄▄▀▄（随模式变色）+ 暗色横线。
+     * 只在等待输入时绘制，标记"输入区从这里开始"（spec §3.3）。
      * 窄终端（<30 列）或宽度未知时跳过。
      */
     private void printInputTopBorder() {
@@ -368,9 +370,20 @@ public final class Tui {
     }
 
     /**
-     * ch16：回合结束状态行（模式 · 模型 · 累计 tokens），DIM 弱化。
+     * ch16：输入区下边线——输入提交（readLine 返回）后立即闭合，框只包住输入行；
+     * 回复内容在框外向下流动。总宽度与上边线一致。
      */
     private void printInputBottomBorder() {
+        int width = safeWidth();
+        if (width < 30) {
+            return;
+        }
+        int inner = Math.min(width - 2, 60) - 8;
+        out(Ansi.DIM + "─".repeat(Math.max(4, inner) + 6) + Ansi.RESET);
+    }
+
+    /** ch16：回合结束状态行（模式 · 模型 · 累计 tokens），DIM 弱化。 */
+    private void printStatusLine() {
         renderer.notice("  " + mode.displayName() + " · " + provider.model()
                 + " · ↑" + thousand(usageIn) + " ↓" + thousand(usageOut) + " tokens");
     }
@@ -864,7 +877,7 @@ public final class Tui {
         if (interrupted) {
             renderer.notice("· 已中断");
         }
-        printInputBottomBorder(); // ch16：回合结束补下边框 + 状态行
+        printStatusLine(); // ch16：回合结束输出状态行（框已在提交时闭合）
         session.setLastActive(System.currentTimeMillis());
         saveSessionQuietly();
     }
