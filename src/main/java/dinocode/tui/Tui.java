@@ -294,7 +294,7 @@ public final class Tui {
     private void loop() {
         while (true) {
             printInputTopBorder();
-            printInputBottomBorder(); // 下线先画在下一行（N14）
+            printInputBottomBorder(); // 无换行打印 + 光标上移，让 readLine 恰好画在两线之间
             String line;
             try {
                 line = reader.readLine(prompt());
@@ -303,14 +303,14 @@ public final class Tui {
                     saveSessionQuietly();
                     return; // 输入行为空：退出
                 }
-                eraseInputFrame(); // 中断：上下线都擦掉重画
+                eraseInputFrame(); // 中断：擦框重画，半行文本留在历史
                 continue; // 输入行非空：清空当前行，继续等待输入
             } catch (EndOfFileException e) {
                 saveSessionQuietly();
                 return; // Ctrl+D
             }
 
-            eraseInputFrame(); // 提交后擦掉上下线：已发送的内容不框（N14），正文自然留在滚动区
+            eraseInputFrame(); // 提交后擦掉上下线：已发送的内容不带框，自然留在滚动区
             String input = line.strip();
             if (input.isEmpty()) {
                 continue;
@@ -356,50 +356,46 @@ public final class Tui {
         }
     }
 
-    /**
-     * ch16：输入区上边线——左端鳞片纹样 ▄▀▄▄▀▄（随模式变色）+ 暗色横线。
-     * 窄终端（<30 列）或宽度未知时跳过。
-     */
-    private void printInputTopBorder() {
-        int width = safeWidth();
-        if (width < 30) {
-            return;
-        }
-        int inner = Math.min(width - 2, 60) - 8; // 减去徽标 6 字符与边距
-        out(modeColor() + "▄▀▄▄▀▄" + Ansi.DIM + "─".repeat(Math.max(4, inner)) + Ansi.RESET);
+    /** 输入框总宽 = 终端宽度（窗口自适应），终端宽度未知时回退 60。 */
+    private int frameWidth() {
+        int w = safeWidth();
+        return w >= 30 ? w : 60;
     }
 
     /**
-     * ch16 N14：输入区下边线——在光标进入输入行之前预画在下一行，
-     * 与上线一起把正在编辑的输入行完整围住。readLine 期间 JLine 只重绘
-     * 光标所在行，下一行的下线不会被冲掉。
+     * ch16：输入区上边线——左端鳞片纹样 ▄▀▄▄▀▄（随模式变色）+ 暗色横线，
+     * 宽度随终端窗口自适应（frameWidth）。
+     */
+    private void printInputTopBorder() {
+        int w = frameWidth();
+        out(modeColor() + "▄▀▄▄▀▄" + Ansi.DIM + "─".repeat(w - 7) + Ansi.RESET);
+    }
+
+    /**
+     * ch16 N14：输入区下边线——<b>无换行</b>打印后光标上移 1 行回到中间空行，
+     * readLine 恰好在上下线之间画提示符；输入期间 JLine 只重绘光标行，下线不丢。
+     * 宽度与上线一致（窗口自适应）。
      */
     private void printInputBottomBorder() {
-        int width = safeWidth();
-        if (width < 30) {
-            return;
-        }
-        int inner = Math.min(width - 2, 60) - 8;
-        out(Ansi.DIM + "─".repeat(Math.max(4, inner) + 6) + Ansi.RESET);
+        int w = frameWidth();
+        PrintWriter pw = terminal.writer();
+        // 顺序敏感：光标此时在中间空行行首 → 先下移 1 行 → 在下一行画下线 → 上移回中间行
+        pw.print("\r\n");                              // 进入下一行（下线行）
+        pw.print(Ansi.DIM + "─".repeat(w) + Ansi.RESET); // 画下线
+        pw.print("\r\033[1A");                         // 回列首并上移 1 行到中间空行
+        pw.flush();
     }
 
     /**
      * ch16 N14：提交后擦掉上下两条边线——已发送的消息不再带框。
-     * 实现：readLine 返回时光标在输入行行尾；先回车下移到下线行清除，
-     * 再上移回输入行清除（JLine 回显的输入文本随行一起清掉）。
-     * 光标控制失败则放弃擦除（边线留存，不影响功能）。
+     * readLine 返回时光标停在输入行：清本行回显，下移清预画下线，再上移复位。
      */
     private void eraseInputFrame() {
-        int width = safeWidth();
-        if (width < 30) {
-            return;
-        }
-        PrintWriter w = terminal.writer();
-        // 下移 1 行清掉下线，再回上 1 行清掉输入行回显（上线留在其上一行）
-        w.print("\033[1B\r\033[2K"); // ↓ 清下线
-        w.print("\033[1A\r\033[2K"); // ↑ 清输入行（含已提交文本的回显）
-        w.print("\r");               // 回行首
-        w.flush();
+        PrintWriter pw = terminal.writer();
+        pw.print("\033[2K\r");       // 清当前行（输入行回显）
+        pw.print("\033[1B\033[2K");  // 下移清掉预画的下线
+        pw.print("\033[1A\r");       // 回到行首原位
+        pw.flush();
     }
 
     /** ch16：回合结束状态行（模式 · 模型 · 累计 tokens），DIM 弱化。 */

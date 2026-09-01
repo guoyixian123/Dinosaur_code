@@ -84,6 +84,14 @@ public final class Agent {
     private volatile String currentModeName = "default";
     /** 测试用：预置的人在回路决策队列；非 null 时 requestApproval 从此取决策（null=取消）。 */
     private final java.util.Deque<Outcome> scriptedOutcomes;
+    /**
+     * ch09 存档增量钩子（Tui 注入 session::archiveOnly）：Agent 直接持有 messages
+     * 引用写入，assistant/tool 消息须经此钩子进 JSONL，否则 /resume 只能恢复 user 消息。
+     * null = 不存档（子 Agent / 测试路径）。
+     */
+    private volatile java.util.function.Consumer<Message> archiveSink;
+    /** 存档整体替换钩子（Tui 注入 session::archiveReplaceOnly）：压缩重建历史时触发。 */
+    private volatile java.util.function.Consumer<List<Message>> sessionReplaceSink;
 
     public Agent(ChatProvider provider, ToolRegistry registry, String version, PermissionEngine engine) {
         this(provider, registry, version, engine, null, null, "", "", null, null);
@@ -138,6 +146,18 @@ public final class Agent {
     /** 测试/无权限场景的便捷构造：跳过权限判定（全放行）。 */
     public Agent(ChatProvider provider, ToolRegistry registry, String version) {
         this(provider, registry, version, PermissionEngine.allowAll());
+    }
+
+    /** 注入存档增量钩子（ch09：Tui 在 run 前传入 session::archiveOnly；null 关闭）。 */
+    public Agent withArchiveSink(java.util.function.Consumer<Message> sink) {
+        this.archiveSink = sink;
+        return this;
+    }
+
+    /** 注入存档整体替换钩子（压缩重建历史 → JSONL compact 标记 + 重放）。 */
+    public Agent withArchiveReplaceSink(java.util.function.Consumer<List<Message>> sink) {
+        this.sessionReplaceSink = sink;
+        return this;
     }
 
     /** 无权限引擎但有压缩上下文（兼容 ch08 调用点）。 */
@@ -305,14 +325,14 @@ public final class Agent {
                 if (out.failed()) {
                     return finishCancelled(history, queue);
                 }
-                history.add(Message.assistant(ensureFinal(out.text())));
+                appendHistory(history, Message.assistant(ensureFinal(out.text())));
                 triggerMemoryUpdate(history); // ch09 F35：本轮结束，条件满足时异步提取笔记
                 // ch12 F9：Stop 事件（自然停止；取消/出错路径不触发）
                 dispatchHook(dinocode.hook.Event.STOP, Map.of("iter", iter));
                 return new TurnEvent.Done(out.usage);
             }
 
-            history.add(Message.assistantWithTools(out.text(), out.calls()));
+            appendHistory(history, Message.assistantWithTools(out.text(), out.calls()));
 
             // 连续未知工具计数（F2-4）
             if (allUnknown(out.calls())) {
@@ -323,7 +343,7 @@ public final class Agent {
 
             BatchOutcome batch = executeBatched(out.calls(), mode, cancel, queue);
             recordReadFiles(out.calls(), batch.results());
-            history.add(Message.tool(batch.results())); // 无论取消都回灌，含已取消占位（F6）
+            appendHistory(history, Message.tool(batch.results())); // 无论取消都回灌，含已取消占位（F6）
 
             if (!batch.completed()) { // 执行中被取消：最高优先级收尾
                 return finishCancelled(history, queue);
@@ -368,6 +388,10 @@ public final class Agent {
                 if (r.newMsgs() != null) {
                     history.clear();
                     history.addAll(r.newMsgs()); // Layer1 替换体 / Layer2 摘要历史写回（in-place，run 持有同一列表）
+                    // 压缩重建历史 → JSONL 侧走 compact 标记 + 整体替换（与 /compact 手动路径一致）
+                    if (archiveSink != null && sessionReplaceSink != null) {
+                        sessionReplaceSink.accept(r.newMsgs());
+                    }
                 }
                 dispatchHook(dinocode.hook.Event.POST_COMPACT, Map.of(
                         "trigger", "auto",
@@ -880,13 +904,22 @@ public final class Agent {
         return text == null || text.isBlank() ? "(模型未返回内容。)" : text;
     }
 
+    /** history 写入统一入口：写列表 + 触发存档钩子（ch09 F13/F44——所有进历史的消息都要能被 /resume 恢复）。 */
+    private void appendHistory(List<Message> history, Message msg) {
+        history.add(msg);
+        if (archiveSink != null) {
+            archiveSink.accept(msg);
+        }
+    }
+
     /** 保证历史以 assistant 文本回合收尾（F6：取消/出错/上限后角色交替不破坏）。 */
     private static void ensureAssistantTail(List<Message> history, String fallback) {
         Optional<Role> last = history.isEmpty()
                 ? Optional.empty()
                 : Optional.of(history.get(history.size() - 1).role());
         if (last.isEmpty() || last.get() != Role.ASSISTANT) {
-            history.add(Message.assistant(fallback));
+            // 收尾占位也进存档：/resume 恢复后角色交替不破坏
+            appendHistory(history, Message.assistant(fallback));
         }
     }
 

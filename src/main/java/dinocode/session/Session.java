@@ -89,6 +89,17 @@ public final class Session {
         this.onReplace = onReplace;
     }
 
+    /**
+     * 只触发存档回调、不改动消息列表——供 Agent 循环使用：Agent 直接持有
+     * messages 引用写入（性能路径），但 assistant/tool 消息必须经此钩子进
+     * JSONL 存档（修复前 history.add 绕过回调，/resume 恢复时缺回复内容）。
+     */
+    public void archiveOnly(Message msg) {
+        if (onAppend != null) {
+            onAppend.accept(msg);
+        }
+    }
+
     /** 追加一条消息并触发 onAppend 回调（F44）。注意：此方法不写 lastActive。 */
     public void append(Message msg) {
         messages.add(msg);
