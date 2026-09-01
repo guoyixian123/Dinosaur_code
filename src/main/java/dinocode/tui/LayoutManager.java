@@ -31,9 +31,7 @@ final class LayoutManager {
 
     private final Terminal terminal;
     private final PrintWriter out;
-    /** 输入行上方横线（模式色）——footer 重绘用。 */
-    private final java.util.function.Supplier<String> topBorder;
-    /** 状态行内容（模式 · 模型 · tokens）——footer 重绘用。 */
+    /** 状态行内容（模式 · 模型 · tokens · ctx）——footer 重绘用。 */
     private final java.util.function.Supplier<String> statusLine;
 
     private boolean enabled;
@@ -41,11 +39,9 @@ final class LayoutManager {
     private int inputRow; // 输入行（1-based）
 
     LayoutManager(Terminal terminal,
-                  java.util.function.Supplier<String> topBorder,
                   java.util.function.Supplier<String> statusLine) {
         this.terminal = terminal;
         this.out = terminal.writer();
-        this.topBorder = topBorder;
         this.statusLine = statusLine;
     }
 
@@ -59,7 +55,6 @@ final class LayoutManager {
         }
         if (enabled) {
             applyRegion();
-            redrawTopBorder();
             redrawStatus();
         }
     }
@@ -90,7 +85,6 @@ final class LayoutManager {
                 out.print(CSI + inputRow + ";1H\033[2K"); // 旧输入行清行
                 out.print("\0338");
                 applyRegion();
-                redrawTopBorder();
                 redrawStatus();
                 focusInput();
             }
@@ -150,19 +144,6 @@ final class LayoutManager {
         out.print("\r\033[2K");             // 清状态行
         out.print(statusLine.get());        // 画状态行
         out.print("\0338");                 // 复位光标（输入行）
-        out.flush();
-    }
-
-    /** 重绘输入行上方的横线（模式切换时变色用）。 */
-    void redrawTopBorder() {
-        if (!enabled) {
-            return;
-        }
-        out.print("\0337");
-        out.print(CSI + (inputRow - 1) + ";1H"); // 横线行 = 输入行上一行
-        out.print("\r\033[2K");
-        out.print(topBorder.get());
-        out.print("\0338");
         out.flush();
     }
 

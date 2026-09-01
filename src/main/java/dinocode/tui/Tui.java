@@ -240,7 +240,7 @@ public final class Tui {
             bindShiftTab(reader);
             renderer = new Renderer(terminal.writer());
             // ch16 N16：布局管理器——底部固定状态行 + 滚动区隔离（init 在 loop 前、Banner 后）
-            layout = new LayoutManager(terminal, this::topBorderText, this::statusText);
+            layout = new LayoutManager(terminal, this::statusText);
 
             // ch11 T7：扫描两层技能目录并注册为 PROMPT 命令（description 以 [skill] 结尾，N7）
             skillCatalog.loadCatalog(workspace != null ? workspace : java.nio.file.Path.of("").toAbsolutePath());
@@ -371,12 +371,6 @@ public final class Tui {
         }
     }
 
-    /** ch16 N16：输入区上边线内容（LayoutManager 重绘用）——纯模式色横线，全宽自适应。 */
-    private String topBorderText() {
-        int w = safeWidth();
-        return modeColor() + "─".repeat(Math.max(20, w)) + Ansi.RESET;
-    }
-
     /** ch16 N16：状态行内容（LayoutManager 重绘用）——模式 · 模型 · 累计 tokens · 上下文用量。 */
     private String statusText() {
         return Ansi.DIM + "  " + mode.displayName() + " · " + provider.model()
@@ -433,8 +427,7 @@ public final class Tui {
         // ch06 F7：Shift+Tab 展开为 /mode，循环切换权限模式（DEFAULT→ACCEPT_EDITS→PLAN→BYPASS→DEFAULT）
         if ("/mode".equals(input)) {
             mode = mode.next();
-            layout.redrawTopBorder(); // ch16 N16：边线随模式换色
-            layout.redrawStatus();    // 状态行同步
+            layout.redrawStatus(); // ch16 N16：状态行同步（横线已移除，❯ 颜色在下次 readLine 自然生效）
             renderer.notice("权限模式: " + mode.displayName() + "（Shift+Tab 继续切换）");
             return true;
         }
