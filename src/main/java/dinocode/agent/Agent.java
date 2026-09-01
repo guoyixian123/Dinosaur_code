@@ -686,7 +686,7 @@ public final class Agent {
                 }
 
                 queue.put(new TurnEvent.ToolStart(call.name(), preview(call.arguments())));
-                results[i] = executeTool(call, cancel.withTimeout(ToolRegistry.DEFAULT_TIMEOUT));
+                results[i] = executeTool(call, cancel.withTimeout(timeoutFor(call.name())));
                 queue.put(new TurnEvent.ToolEnd(call.name(), results[i].content(), results[i].isError()));
                 // ch12 F9：PostToolUse（拿到 result 之后）
                 dispatchHook(dinocode.hook.Event.POST_TOOL_USE, Map.of(
@@ -739,7 +739,7 @@ public final class Agent {
                 continue;
             }
             ToolCall call = calls.get(idx);
-            CancelToken toolToken = cancel.withTimeout(ToolRegistry.DEFAULT_TIMEOUT);
+            CancelToken toolToken = cancel.withTimeout(timeoutFor(call.name()));
             Thread.ofVirtual().start(() -> {
                 try {
                     results[idx] = executeTool(call, toolToken);
@@ -793,6 +793,13 @@ public final class Agent {
             Thread.currentThread().interrupt();
             return null;
         }
+    }
+
+    /** 单工具执行超时：Agent 工具（子 Agent 多轮请求）用长超时，其余 30s。 */
+    private static java.time.Duration timeoutFor(String toolName) {
+        return "Agent".equals(toolName)
+                ? ToolRegistry.AGENT_TOOL_TIMEOUT
+                : ToolRegistry.DEFAULT_TIMEOUT;
     }
 
     /** 单工具执行：30s 超时兜底（N1）。 */

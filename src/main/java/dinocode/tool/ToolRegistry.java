@@ -17,6 +17,9 @@ public final class ToolRegistry {
     /** 单个工具执行的默认超时（N1，不可配）。 */
     public static final Duration DEFAULT_TIMEOUT = Duration.ofSeconds(30);
 
+    /** ch13：Agent 工具专用超时——子 Agent 需多轮 LLM 请求，30s 会腰斩正常任务。 */
+    public static final Duration AGENT_TOOL_TIMEOUT = Duration.ofMinutes(10);
+
     private final List<String> order = new ArrayList<>();
     private final Map<String, Tool> tools = new HashMap<>();
 
