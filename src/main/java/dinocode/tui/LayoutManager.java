@@ -113,8 +113,8 @@ final class LayoutManager {
 
     /**
      * 在滚动区追加一行内容（回复行/工具行/diff 行/通知）。
-     * 原子序列：锚定输入行 → 输出 → 回车换行（区内滚动）→ 光标自然回到区底输入行。
-     * 每次都先锚定，不依赖"光标恰好在输入行"——resize/菜单/中断后依然正确。
+     * 前提：光标已在滚动区底行（输入行）——JLine 回显、scrollRaw 流式都保证这一点。
+     * 直接输出 + 回车换行 → 区内滚动把内容顶入，光标仍在区底。
      */
     void scrollLine(String s) {
         if (!enabled) {
@@ -122,19 +122,17 @@ final class LayoutManager {
             out.flush();
             return;
         }
-        out.print(CSI + inputRow + ";1H"); // 锚定输入行行首
-        out.print(s + "\r\n");             // 输出并换行 → 触发区内滚动
+        out.print(s + "\r\n"); // 输入行位置输出 → 换行触发区内滚动
         out.flush();
     }
 
-    /** 在滚动区输出裸文本（流式正文/thinking；换行随内容）。输出前锚定输入行。 */
+    /** 在滚动区输出裸文本（流式正文/thinking；换行随内容）。光标须已在输入行。 */
     void scrollRaw(String s) {
         if (!enabled) {
             out.print(s);
             out.flush();
             return;
         }
-        out.print(CSI + inputRow + ";1H"); // 锚定（流式 delta 每次都重新锚定，行内位置丢给 \r 语义）
         out.print(s);
         out.flush();
     }
@@ -174,16 +172,6 @@ final class LayoutManager {
             return;
         }
         out.print(CSI + inputRow + ";1H");
-        out.flush();
-    }
-
-    /** 清空输入行内容（提交后调用；JLine 回显的文本随之消失）。 */
-    void clearInputRow() {
-        if (!enabled) {
-            return;
-        }
-        out.print(CSI + inputRow + ";1H");
-        out.print("\033[2K");
         out.flush();
     }
 }

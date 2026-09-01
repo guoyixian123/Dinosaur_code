@@ -323,20 +323,19 @@ public final class Tui {
                 return; // Ctrl+D
             }
 
-            // ch16 N16：提交 = 清输入行 → 原位重打 "❯ 消息" → 回车换行 → 区内滚动把消息
-            // 顶入历史，光标回输入行。清行避免 JLine 回显与新打内容叠加。
+            // ch16 N16：提交后**什么都不画**——JLine 回显的 "❯ 消息" 就留在输入行原位，
+            // turn 的第一条输出(scrollLine 锚定输入行)会把它顶进历史。
+            // 修复前手动清行+重打导致消息出现两次（回显 + 重打）。
             String input = line.strip();
             if (input.isEmpty()) {
                 continue;
             }
             if (input.startsWith("/")) {
-                commitInputLine(input); // 命令也进滚动区历史
                 if (!handleCommand(input)) {
                     return;
                 }
                 continue;
             }
-            commitInputLine(input);
             turn(input);
         }
     }
@@ -344,12 +343,6 @@ public final class Tui {
     /** 提示符（Claude Code 风格）：细横线分隔 + 模式色 ❯ + 模式徽标（ch06 F7 + ch16）。 */
     private String prompt() {
         return modeColor() + "❯ " + modeBadge() + Ansi.RESET;
-    }
-
-    /** ch16 N16：提交提交行——清输入行回显 → 原位重打 → 换行入滚动区历史。 */
-    private void commitInputLine(String input) {
-        layout.clearInputRow();
-        layout.scrollLine(prompt() + input);
     }
 
     private String modeColor() {
@@ -384,10 +377,32 @@ public final class Tui {
         return modeColor() + "─".repeat(Math.max(20, w)) + Ansi.RESET;
     }
 
-    /** ch16 N16：状态行内容（LayoutManager 重绘用）——模式 · 模型 · 累计 tokens。 */
+    /** ch16 N16：状态行内容（LayoutManager 重绘用）——模式 · 模型 · 累计 tokens · 上下文用量。 */
     private String statusText() {
         return Ansi.DIM + "  " + mode.displayName() + " · " + provider.model()
-                + " · ↑" + thousand(usageIn) + " ↓" + thousand(usageOut) + " tokens" + Ansi.RESET;
+                + " · ↑" + thousand(usageIn) + " ↓" + thousand(usageOut)
+                + " · " + contextUsageText() + Ansi.RESET;
+    }
+
+    /** ch16 N17：当前上下文估算/窗口上限，形如 "ctx 34,210/200k (17%)"；不可用时省略。 */
+    private String contextUsageText() {
+        if (compact == null) {
+            return "";
+        }
+        try {
+            long used = Token.estimateTokens(compact.getUsageAnchor(),
+                    session.getMessages(), compact.getAnchorMsgLen());
+            int window = compact.contextWindow > 0
+                    ? compact.contextWindow : config.effectiveContextWindow();
+            if (window <= 0) {
+                return "";
+            }
+            int pct = (int) Math.min(100, used * 100 / window);
+            String windowText = window >= 1000 ? (window / 1000) + "k" : String.valueOf(window);
+            return "ctx " + thousand(used) + "/" + windowText + " (" + pct + "%)";
+        } catch (RuntimeException e) {
+            return "";
+        }
     }
 
     private static String thousand(long n) {
