@@ -61,6 +61,8 @@ public final class Tui {
     private Terminal terminal;
     private LineReader reader;
     private Renderer renderer;
+    /** ch16 N16：滚动区布局（输入区与内容区隔离；非交互终端自动降级为普通流式）。 */
+    private LayoutManager layout;
 
     // ch06：权限模式跨轮保持；用量跨轮累加
     private Mode mode;
@@ -225,6 +227,11 @@ public final class Tui {
                     .encoding(StandardCharsets.UTF_8)
                     .build();
             terminal.handle(Terminal.Signal.INT, signal -> onInterrupt());
+            terminal.handle(Terminal.Signal.WINCH, signal -> {
+                if (layout != null) {
+                    layout.resize(); // ch16 N16：窗口变化 → 重建滚动区+重绘底部
+                }
+            });
             reader = LineReaderBuilder.builder()
                     .terminal(terminal)
                     .completer(new SlashCompleter(cmdRegistry)) // ch10 F24：/ 补全（Tab 触发）
@@ -232,6 +239,8 @@ public final class Tui {
             // Shift+Tab（终端发送 ESC[Z）展开为 /mode 命令提交（ch06 F7，IDLE 态循环切换）
             bindShiftTab(reader);
             renderer = new Renderer(terminal.writer());
+            // ch16 N16：布局管理器——底部固定状态行 + 滚动区隔离（init 在 loop 前、Banner 后）
+            layout = new LayoutManager(terminal, this::topBorderText, this::statusText);
 
             // ch11 T7：扫描两层技能目录并注册为 PROMPT 命令（description 以 [skill] 结尾，N7）
             skillCatalog.loadCatalog(workspace != null ? workspace : java.nio.file.Path.of("").toAbsolutePath());
@@ -261,12 +270,17 @@ public final class Tui {
             ensureSessionAgent();
             sessionAgent.dispatchSessionHook(dinocode.hook.Event.SESSION_START, sessionId(), Map.of());
 
+            // ch16 N16：建立滚动区 + 首绘底部（在 loop 之前；此时光标会被聚焦到输入行）
+            layout.init();
             loop();
             return 0;
         } catch (IOException e) {
             System.err.println("终端初始化失败: " + e.getMessage());
             return 1;
         } finally {
+            if (layout != null) {
+                layout.dispose(); // ch16 N16：解除滚动区，恢复正常终端行为
+            }
             closeTerminal();
         }
     }
@@ -292,9 +306,9 @@ public final class Tui {
     }
 
     private void loop() {
+        layout.init();
+        layout.focusInput();
         while (true) {
-            printInputTopBorder();
-            printInputBottomBorder(); // 无换行打印 + 光标上移，让 readLine 恰好画在两线之间
             String line;
             try {
                 line = reader.readLine(prompt());
@@ -303,24 +317,26 @@ public final class Tui {
                     saveSessionQuietly();
                     return; // 输入行为空：退出
                 }
-                eraseInputFrame(e.getPartialLine().strip()); // 中断：擦框并保留已输入的半行
-                continue; // 输入行非空：清空当前行，继续等待输入
+                continue; // 输入行非空：清空当前行，继续等待输入（滚动区布局下输入行原地重画）
             } catch (EndOfFileException e) {
                 saveSessionQuietly();
                 return; // Ctrl+D
             }
 
-            eraseInputFrame(line.strip()); // 提交后擦框并以无框形式重打消息（N14/N15）
+            // ch16 N16：提交 = 清输入行 → 原位重打 "❯ 消息" → 回车换行 → 区内滚动把消息
+            // 顶入历史，光标回输入行。清行避免 JLine 回显与新打内容叠加。
             String input = line.strip();
             if (input.isEmpty()) {
                 continue;
             }
             if (input.startsWith("/")) {
+                commitInputLine(input); // 命令也进滚动区历史
                 if (!handleCommand(input)) {
                     return;
                 }
                 continue;
             }
+            commitInputLine(input);
             turn(input);
         }
     }
@@ -328,6 +344,12 @@ public final class Tui {
     /** 提示符（Claude Code 风格）：细横线分隔 + 模式色 ❯ + 模式徽标（ch06 F7 + ch16）。 */
     private String prompt() {
         return modeColor() + "❯ " + modeBadge() + Ansi.RESET;
+    }
+
+    /** ch16 N16：提交提交行——清输入行回显 → 原位重打 → 换行入滚动区历史。 */
+    private void commitInputLine(String input) {
+        layout.clearInputRow();
+        layout.scrollLine(prompt() + input);
     }
 
     private String modeColor() {
@@ -356,59 +378,16 @@ public final class Tui {
         }
     }
 
-    /** 输入框总宽 = 终端宽度（窗口自适应），终端宽度未知时回退 60。 */
-    private int frameWidth() {
+    /** ch16 N16：输入区上边线内容（LayoutManager 重绘用）——纯模式色横线，全宽自适应。 */
+    private String topBorderText() {
         int w = safeWidth();
-        return w >= 30 ? w : 60;
+        return modeColor() + "─".repeat(Math.max(20, w)) + Ansi.RESET;
     }
 
-    /**
-     * ch16：输入区上边线——纯绿色横线（N15：去掉鳞片纹样 ▄▀▄▄▀▄），
-     * 宽度随终端窗口自适应（frameWidth），颜色随权限模式。
-     */
-    private void printInputTopBorder() {
-        out(modeColor() + "─".repeat(frameWidth()) + Ansi.RESET);
-    }
-
-    /**
-     * ch16 N14/N15：输入区下边线——与上线<b>同色</b>（模式色，修复前误用 DIM 呈灰色）。
-     * 画在输入行下一行后光标上移回中间空行，readLine 恰好在上下线之间画提示符。
-     */
-    private void printInputBottomBorder() {
-        int w = frameWidth();
-        PrintWriter pw = terminal.writer();
-        // 顺序敏感：光标此时在中间空行行首 → 先下移 1 行 → 在下一行画下线 → 上移回中间行
-        pw.print("\r\n");                              // 进入下一行（下线行）
-        pw.print(modeColor() + "─".repeat(w) + Ansi.RESET); // 下线与上线同色
-        pw.print("\r\033[1A");                         // 回列首并上移 1 行到中间空行
-        pw.flush();
-    }
-
-    /**
-     * ch16 N14/N15：提交后擦掉整个框（上线+输入行+下线三行），再以无框形式重打
-     * 已发送消息——历史区不残框、不吞消息（修复前靠猜光标位置，两种赌错方向
-     * 分别表现为"历史带框"和"消息行被清没"）。
-     * readLine 返回时光标可能停在输入行或已因回车落到下线行；从当前位置向上
-     * 清两行、向下清一行，覆盖三行的所有落点可能，消息行随后重打。
-     */
-    private void eraseInputFrame(String sentText) {
-        PrintWriter pw = terminal.writer();
-        // 从光标当前位置起，向上清 2 行（上线/消息行的某种组合），向下清 1 行
-        pw.print("\r\033[2K");        // 清当前行
-        pw.print("\033[1A\r\033[2K"); // 上 1 行清
-        pw.print("\033[1A\r\033[2K"); // 上 2 行清（覆盖上线可能所在）
-        pw.print("\033[2B");          // 回到原位（向下 2 行）
-        pw.print("\033[1B\r\033[2K"); // 下 1 行清（覆盖下线可能所在）
-        pw.print("\033[1A\r");        // 回到原位行首
-        pw.flush();
-        // 无框重打消息行，作为对话历史（模式色 ❯，与输入时视觉一致）
-        out(prompt() + sentText);
-    }
-
-    /** ch16：回合结束状态行（模式 · 模型 · 累计 tokens），DIM 弱化。 */
-    private void printStatusLine() {
-        renderer.notice("  " + mode.displayName() + " · " + provider.model()
-                + " · ↑" + thousand(usageIn) + " ↓" + thousand(usageOut) + " tokens");
+    /** ch16 N16：状态行内容（LayoutManager 重绘用）——模式 · 模型 · 累计 tokens。 */
+    private String statusText() {
+        return Ansi.DIM + "  " + mode.displayName() + " · " + provider.model()
+                + " · ↑" + thousand(usageIn) + " ↓" + thousand(usageOut) + " tokens" + Ansi.RESET;
     }
 
     private static String thousand(long n) {
@@ -439,6 +418,8 @@ public final class Tui {
         // ch06 F7：Shift+Tab 展开为 /mode，循环切换权限模式（DEFAULT→ACCEPT_EDITS→PLAN→BYPASS→DEFAULT）
         if ("/mode".equals(input)) {
             mode = mode.next();
+            layout.redrawTopBorder(); // ch16 N16：边线随模式换色
+            layout.redrawStatus();    // 状态行同步
             renderer.notice("权限模式: " + mode.displayName() + "（Shift+Tab 继续切换）");
             return true;
         }
@@ -896,6 +877,7 @@ public final class Tui {
         saveSessionQuietly();
 
         Spinner spinner = new Spinner(terminal.writer());
+        layout.focusInput(); // ch16 N16：光标回输入行（滚动区底行），spinner 在此行刷新
         generating = true;
         interrupted = false;
         boolean receivedAny = false;
@@ -944,7 +926,7 @@ public final class Tui {
         if (interrupted) {
             renderer.notice("· 已中断");
         }
-        printStatusLine(); // ch16：回合结束输出状态行（框已在提交时闭合）
+        layout.redrawStatus(); // ch16 N16：回合结束刷新底部固定状态行（用量已累计）
         session.setLastActive(System.currentTimeMillis());
         saveSessionQuietly();
     }
