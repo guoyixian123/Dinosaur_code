@@ -11,37 +11,39 @@ final class Spinner {
     private static final String[] FRAMES = {"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"};
 
     private final PrintWriter out;
-    private final Thread thread;
-    private volatile boolean running = true;
+    private Thread thread;
+    private volatile boolean running;
 
     Spinner(PrintWriter out) {
         this.out = out;
-        this.thread = new Thread(this::animate, "dino-spinner");
-        this.thread.setDaemon(true);
     }
 
-    void start() {
+    /** 启动动画（可重入：人在回路暂停-恢复会多次 start）。 */
+    synchronized void start() {
+        if (thread != null && thread.isAlive()) {
+            return;
+        }
+        running = true;
+        thread = new Thread(this::animate, "dino-spinner");
+        thread.setDaemon(true);
         thread.start();
     }
 
-    /** 仅停止动画（不清行、不 join），供暂停-恢复场景（ch06 人在回路）。 */
+    /** 仅停止动画（不清行），供暂停-恢复场景（ch06 人在回路）。 */
     void ensureStopped() {
         running = false;
-        try {
-            thread.join(200);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
+        if (thread != null) {
+            try {
+                thread.join(200);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
         }
     }
 
     /** 停止并清掉指示行（幂等）。 */
     void stop() {
-        running = false;
-        try {
-            thread.join(200);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-        }
+        ensureStopped();
         synchronized (out) {
             out.print(Ansi.CLEAR_LINE);
             out.flush();
